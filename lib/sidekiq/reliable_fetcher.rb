@@ -5,6 +5,29 @@ module Sidekiq
     DEFAULT_CLEANING_INTERVAL = 5000 # clean each N processed jobs
     IDLE_TIMEOUT = 5 # seconds
 
+    UnitOfWork = Struct.new(:queue, :job) do
+      def acknowledge
+        # NOTE LREM is O(n), so depending on the type of jobs and their average
+        # duration, another data structure might be more suited.
+        # But as there should not be too much jobs in this queue in the same time,
+        # it's probably ok.
+        Sidekiq.redis { |conn| conn.lrem("#{queue}:#{WORKING_QUEUE}", 1, job) }
+      end
+
+      def queue_name
+        queue.gsub(/.*queue:/, '')
+      end
+
+      def requeue
+        Sidekiq.redis do |conn|
+          conn.pipelined do
+            conn.lpush(queue, job)
+            conn.lrem("#{queue}:#{WORKING_QUEUE}", 1, job)
+          end
+        end
+      end
+    end
+
     def self.setup_reliable_fetch!(config)
       config.options[:fetch] = Sidekiq::ReliableFetcher
       config.on(:startup) do
@@ -22,6 +45,8 @@ module Sidekiq
       @nb_fetched_jobs = 0
       @cleaning_interval = options[:cleaning_interval] || DEFAULT_CLEANING_INTERVAL
       @consider_dead_after = options[:consider_dead_after] || DEFAULT_DEAD_AFTER
+
+      Sidekiq.logger.info { "GitLab reliable fetch activated!" }
     end
 
     def retrieve_work
@@ -70,8 +95,8 @@ module Sidekiq
       Sidekiq.redis do |conn|
         conn.pipelined do
           inprogress.each do |unit_of_work|
-            conn.lpush("#{unit_of_work.queue}", unit_of_work.message)
-            conn.lrem("#{unit_of_work.queue}:#{WORKING_QUEUE}", 1, unit_of_work.message)
+            conn.lpush("#{unit_of_work.queue}", unit_of_work.job)
+            conn.lrem("#{unit_of_work.queue}:#{WORKING_QUEUE}", 1, unit_of_work.job)
           end
         end
       end
@@ -79,29 +104,6 @@ module Sidekiq
       Sidekiq.logger.info("Pushed #{inprogress.size} messages back to Redis")
     rescue => ex
       Sidekiq.logger.warn("Failed to requeue #{inprogress.size} jobs: #{ex.message}")
-    end
-
-    UnitOfWork = Struct.new(:queue, :message) do
-      def acknowledge
-        # NOTE LREM is O(n), so depending on the type of jobs and their average
-        # duration, another data structure might be more suited.
-        # But as there should not be too much jobs in this queue in the same time,
-        # it's probably ok.
-        Sidekiq.redis { |conn| conn.lrem("#{queue}:#{WORKING_QUEUE}", 1, message) }
-      end
-
-      def queue_name
-        queue.gsub(/.*queue:/, '')
-      end
-
-      def requeue
-        Sidekiq.redis do |conn|
-          conn.pipelined do
-            conn.lpush(queue, message)
-            conn.lrem("#{queue}:#{WORKING_QUEUE}", 1, message)
-          end
-        end
-      end
     end
 
     private

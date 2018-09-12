@@ -1,4 +1,4 @@
-sidekiq-reliable-fetch
+gitlab-sidekiq-fetcher
 ======================
 
 sidekiq-reliable-fetch is an extension to Sidekiq that adds support for reliable
@@ -12,7 +12,7 @@ command](http://redis.io/commands/rpoplpush#pattern-reliable-queue).
 Add the following to your `Gemfile`:
 
 ```ruby
-gem 'sidekiq-reliable-fetch'
+gem 'gitlab-sidekiq-fetcher'
 ```
 
 ## Configuration
