@@ -1,8 +1,11 @@
 gitlab-sidekiq-fetcher
 ======================
 
-sidekiq-reliable-fetch is an extension to Sidekiq that adds support for reliable
+`gitlab-sidekiq-fetcher` is an extension to Sidekiq that adds support for reliable
 fetches from Redis.
+
+It's based on https://github.com/TEA-ebook/sidekiq-reliable-fetch.
+At this time we only added Sidekiq 5+ support to it.
 
 It implements in Sidekiq the reliable queue pattern using [Redis' rpoplpush
 command](http://redis.io/commands/rpoplpush#pattern-reliable-queue).
@@ -12,7 +15,7 @@ command](http://redis.io/commands/rpoplpush#pattern-reliable-queue).
 Add the following to your `Gemfile`:
 
 ```ruby
-gem 'gitlab-sidekiq-fetcher'
+gem 'gitlab-sidekiq-fetcher', require: 'sidekiq-reliable-fetch'
 ```
 
 ## Configuration
