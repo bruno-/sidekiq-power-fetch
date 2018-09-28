@@ -22,8 +22,8 @@ module Sidekiq
       def requeue
         Sidekiq.redis do |conn|
           conn.pipelined do
-            conn.lpush(queue, job)
-            conn.lrem("#{queue}:#{WORKING_QUEUE}", 1, job)
+            conn.lpush("queue:#{queue_name}", job)
+            conn.lrem("queue:#{queue_name}:#{WORKING_QUEUE}", 1, job)
           end
         end
       end
