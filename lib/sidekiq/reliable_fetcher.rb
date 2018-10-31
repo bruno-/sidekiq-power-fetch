@@ -1,10 +1,14 @@
 # frozen_string_literal: true
 module Sidekiq
   class ReliableFetcher
-    WORKING_QUEUE = 'working'
-    DEFAULT_DEAD_AFTER = 60 * 60 * 24 # 24 hours
-    DEFAULT_CLEANING_INTERVAL = 5000 # clean each N processed jobs
-    IDLE_TIMEOUT = 5 # seconds
+    WORKING_QUEUE            = 'working'
+    DEFAULT_DEAD_AFTER       = 60 * 60 * 24 # 24 hours
+    CLEANUP_INTERVAL         = 60 * 60 # 1 hour
+
+    # TAKE_LEASE_TIME_INTERVAL defines how often we try to take a lease
+    # to not flood our Redis server with SET requests
+    TAKE_LEASE_TIME_INTERVAL = 2 * 60
+    IDLE_TIMEOUT             = 5 # seconds
 
     UnitOfWork = Struct.new(:queue, :job) do
       def acknowledge
@@ -31,9 +35,8 @@ module Sidekiq
 
     def self.setup_reliable_fetch!(config)
       config.options[:fetch] = Sidekiq::ReliableFetcher
-      config.on(:startup) do
-        requeue_on_startup!(config.options[:queues])
-      end
+
+      Sidekiq.logger.info { "GitLab reliable fetch activated!" }
     end
 
     def initialize(options)
@@ -43,22 +46,20 @@ module Sidekiq
       @queues_iterator = queues.shuffle.cycle
       @queues_size  = queues.size
 
-      @nb_fetched_jobs = 0
-      @cleaning_interval = options[:cleaning_interval] || DEFAULT_CLEANING_INTERVAL
       @consider_dead_after = options[:consider_dead_after] || DEFAULT_DEAD_AFTER
-
-      Sidekiq.logger.info { "GitLab reliable fetch activated!" }
+      @cleanup_interval = options[:cleanup_interval] || CLEANUP_INTERVAL
+      @take_lease_time_interval = options[:take_lease_time_interval]  || TAKE_LEASE_TIME_INTERVAL
+      @last_try_to_take_lease_at = 0
     end
 
     def retrieve_work
-      clean_working_queues! if @cleaning_interval != -1 && @nb_fetched_jobs >= @cleaning_interval
+      clean_working_queues!
 
       @queues_size.times do
         queue = @queues_iterator.next
         work = Sidekiq.redis { |conn| conn.rpoplpush(queue, "#{queue}:#{WORKING_QUEUE}") }
 
         if work
-          @nb_fetched_jobs += 1
           return UnitOfWork.new(queue, work)
         end
       end
@@ -68,22 +69,6 @@ module Sidekiq
       sleep(IDLE_TIMEOUT)
 
       nil
-    end
-
-    def self.requeue_on_startup!(queues)
-      Sidekiq.logger.debug { "Re-queueing working jobs" }
-
-      counter = 0
-
-      Sidekiq.redis do |conn|
-        queues.uniq.each do |queue|
-          while conn.rpoplpush("queue:#{queue}:#{WORKING_QUEUE}", "queue:#{queue}")
-            counter += 1
-          end
-        end
-      end
-
-      Sidekiq.logger.debug { "Re-queued #{counter} jobs" }
     end
 
     # By leaving this as a class method, it can be pluggable and used by the Manager actor. Making it
@@ -102,7 +87,7 @@ module Sidekiq
         end
       end
 
-      Sidekiq.logger.info("Pushed #{inprogress.size} messages back to Redis")
+      Sidekiq.logger.info("Pushed #{inprogress.size} jobs back to Redis")
     rescue => ex
       Sidekiq.logger.warn("Failed to requeue #{inprogress.size} jobs: #{ex.message}")
     end
@@ -114,13 +99,25 @@ module Sidekiq
     # NOTE Potential problem here if a specific job always make a worker
     # really fail.
     def clean_working_queues!
-      Sidekiq.logger.debug "Cleaning working queues"
+      return unless take_lease
+
+      Sidekiq.logger.info "Cleaning working queues"
 
       @unique_queues.each do |queue|
         clean_working_queue!(queue)
       end
 
       @nb_fetched_jobs = 0
+    end
+
+    def take_lease
+      return unless Time.now.to_f - @last_try_to_take_lease_at > @take_lease_time_interval
+
+      @last_try_to_take_lease_at = Time.now.to_f
+
+      Sidekiq.redis do |conn|
+        redis.set('reliable-fetcher-cleanup-lock', 1, nx: true, ex: @cleanup_interval)
+      end
     end
 
     def clean_working_queue!(queue)
