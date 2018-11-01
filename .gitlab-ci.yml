@@ -1,0 +1,27 @@
+image: "ruby:2.5"
+
+before_script:
+  - ruby -v
+  - which ruby
+  - gem install bundler --no-ri --no-rdoc
+  - bundle install --jobs $(nproc)  "${FLAGS[@]}"
+
+variables:
+  REDIS_URL: "redis://redis"
+
+rspec:
+  stage: test
+  coverage: '/LOC \((\d+\.\d+%)\) covered.$/'
+  script:
+    - bundle exec rspec
+  services:
+    - redis:alpine
+  artifacts:
+    expire_in: 31d
+    when: always
+    paths:
+      - coverage/
+
+# rubocop:
+#   script:
+#     - bundle exec rubocop

@@ -2,7 +2,9 @@ require 'sidekiq'
 require 'sidekiq/util'
 require 'sidekiq/api'
 require 'pry'
+require 'simplecov'
 
+SimpleCov.start
 
 REDIS_URL = ENV['REDIS_URL'] || 'redis://localhost:6379'
 REDIS = Sidekiq::RedisConnection.create(:url => REDIS_URL)
