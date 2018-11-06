@@ -2,21 +2,27 @@
 module Sidekiq
   class ReliableFetcher
     WORKING_QUEUE            = 'working'
-    DEFAULT_DEAD_AFTER       = 60 * 60 * 24 # 24 hours
     CLEANUP_INTERVAL         = 60 * 60 # 1 hour
 
     # TAKE_LEASE_TIME_INTERVAL defines how often we try to take a lease
     # to not flood our Redis server with SET requests
     TAKE_LEASE_TIME_INTERVAL = 2 * 60
     IDLE_TIMEOUT             = 5 # seconds
+    HEARTBEAT_INTERVAL       = 30 # seconds
+    # We want the fetch operation to timeout every few seconds so the thread
+    # can check if the process is shutting down. This constant is only used for semi-reliable fetch
+    SEMI_RELIABLE_FETCH_TIMEOUT = 2
+
+    # Defines the COUNT parameter that will be passed to Redis SCAN command
+    SCAN_COUNT = 1000
 
     UnitOfWork = Struct.new(:queue, :job) do
       def acknowledge
-        # NOTE LREM is O(n), so depending on the type of jobs and their average
-        # duration, another data structure might be more suited.
-        # But as there should not be too much jobs in this queue in the same time,
-        # it's probably ok.
-        Sidekiq.redis { |conn| conn.lrem("#{queue}:#{WORKING_QUEUE}", 1, job) }
+        Sidekiq.redis { |conn| conn.lrem("#{WORKING_QUEUE}:#{queue}:#{hostname}:#{::Process.pid}", 1, job) }
+      end
+
+      def hostname
+        @hostname ||= Socket.gethostname
       end
 
       def queue_name
@@ -27,7 +33,7 @@ module Sidekiq
         Sidekiq.redis do |conn|
           conn.pipelined do
             conn.lpush("queue:#{queue_name}", job)
-            conn.lrem("queue:#{queue_name}:#{WORKING_QUEUE}", 1, job)
+            conn.lrem("#{WORKING_QUEUE}:queue:#{queue_name}:#{hostname}:#{::Process.pid}", 1, job)
           end
         end
       end
@@ -37,31 +43,73 @@ module Sidekiq
       config.options[:fetch] = Sidekiq::ReliableFetcher
 
       Sidekiq.logger.info { "GitLab reliable fetch activated!" }
+
+      start_heartbeat_thread
+    end
+
+    def self.start_heartbeat_thread
+      Thread.new do
+        loop do
+          begin
+            heartbeat
+
+            sleep HEARTBEAT_INTERVAL
+          rescue => e
+            Sidekiq.logger.error { "Heartbeat thread error: #{e.message}" }
+          end
+        end
+      end
+    end
+
+    def self.heartbeat
+      hostname = Socket.gethostname
+      pid = ::Process.pid
+
+      Sidekiq.redis do |conn|
+        conn.set(heartbeat_key(hostname, pid), 1, ex: HEARTBEAT_INTERVAL * 2)
+      end
+
+      Sidekiq.logger.debug { "Heartbeat for hostname: #{hostname} and pid: #{pid}" }
     end
 
     def initialize(options)
-      queues = options[:queues].map { |q| "queue:#{q}" }
+      @queues = options[:queues].map { |q| "queue:#{q}" }.shuffle
 
-      @unique_queues = queues.uniq
-      @queues_iterator = queues.shuffle.cycle
-      @queues_size  = queues.size
+      @queues_iterator = @queues.cycle
+      @queues_size  = @queues.size
 
-      @consider_dead_after = options[:consider_dead_after] || DEFAULT_DEAD_AFTER
       @cleanup_interval = options[:cleanup_interval] || CLEANUP_INTERVAL
       @take_lease_time_interval = options[:take_lease_time_interval]  || TAKE_LEASE_TIME_INTERVAL
       @last_try_to_take_lease_at = 0
+
+      @semi_reliable_fetch = options[:semi_reliable_fetch]
     end
 
     def retrieve_work
-      clean_working_queues!
+      self.class.clean_working_queues! if take_lease
 
+      if @semi_reliable_fetch
+        semi_reliable_fetch
+      else
+        reliable_fetch
+      end
+    end
+
+    def semi_reliable_fetch
+      work = Sidekiq.redis { |conn| conn.brpop(*queues_cmd) }
+      return unless work
+
+      unit_of_work = UnitOfWork.new(*work)
+      Sidekiq.redis { |conn| conn.lpush("#{WORKING_QUEUE}:#{unit_of_work.queue}:#{Socket.gethostname}:#{::Process.pid}", unit_of_work.job) }
+
+      unit_of_work
+    end
+
+    def reliable_fetch
       @queues_size.times do
         queue = @queues_iterator.next
-        work = Sidekiq.redis { |conn| conn.rpoplpush(queue, "#{queue}:#{WORKING_QUEUE}") }
-
-        if work
-          return UnitOfWork.new(queue, work)
-        end
+        work = Sidekiq.redis { |conn| conn.rpoplpush(queue, "#{WORKING_QUEUE}:#{queue}:#{Socket.gethostname}:#{::Process.pid}") }
+        return UnitOfWork.new(queue, work) if work
       end
 
       # We didn't find a job in any of the configured queues. Let's sleep a bit
@@ -71,8 +119,12 @@ module Sidekiq
       nil
     end
 
-    # By leaving this as a class method, it can be pluggable and used by the Manager actor. Making it
-    # an instance method will make it async to the Fetcher actor
+    def queues_cmd
+      queues = @queues.uniq
+      queues << SEMI_RELIABLE_FETCH_TIMEOUT
+      queues
+    end
+
     def self.bulk_requeue(inprogress, options)
       return if inprogress.empty?
 
@@ -82,7 +134,7 @@ module Sidekiq
         conn.pipelined do
           inprogress.each do |unit_of_work|
             conn.lpush("#{unit_of_work.queue}", unit_of_work.job)
-            conn.lrem("#{unit_of_work.queue}:#{WORKING_QUEUE}", 1, unit_of_work.job)
+            conn.lrem("#{WORKING_QUEUE}:#{unit_of_work.queue}:#{Socket.gethostname}:#{::Process.pid}", 1, unit_of_work.job)
           end
         end
       end
@@ -92,23 +144,50 @@ module Sidekiq
       Sidekiq.logger.warn("Failed to requeue #{inprogress.size} jobs: #{ex.message}")
     end
 
-    private
-
     # Detect "old" jobs and requeue them because the worker they were assigned
     # to probably failed miserably.
-    # NOTE Potential problem here if a specific job always make a worker
-    # really fail.
-    def clean_working_queues!
-      return unless take_lease
-
+    def self.clean_working_queues!
       Sidekiq.logger.info "Cleaning working queues"
 
-      @unique_queues.each do |queue|
-        clean_working_queue!(queue)
-      end
+      Sidekiq.redis do |conn|
+        conn.scan_each(match: "#{WORKING_QUEUE}:queue:*", count: SCAN_COUNT) do |key|
+          # Example: "working:name_of_the_job:queue:{hostname}:{PID}"
+          hostname, pid = key.scan(/:([^:]*):([0-9]*)\z/).flatten
 
-      @nb_fetched_jobs = 0
+          continue if hostname.nil? || pid.nil?
+
+          if worker_dead?(hostname, pid)
+            clean_working_queue!(key)
+          end
+        end
+      end
     end
+
+    def self.worker_dead?(hostname, pid)
+      Sidekiq.redis do |conn|
+        !conn.get(heartbeat_key(hostname,pid))
+      end
+    end
+
+    def self.heartbeat_key(hostname, pid)
+      "reliable-fetcher-heartbeat-#{hostname}-#{pid}"
+    end
+
+    def self.clean_working_queue!(working_queue)
+      original_queue = working_queue.gsub(/#{WORKING_QUEUE}:|:[^:]*:[0-9]*\z/, '')
+
+      Sidekiq.redis do |conn|
+        count = 0
+
+        while conn.rpoplpush(working_queue, original_queue)
+          count += 1
+        end
+
+        Sidekiq.logger.info "Requeued #{count} dead job"
+      end
+    end
+
+    private
 
     def take_lease
       return unless Time.now.to_f - @last_try_to_take_lease_at > @take_lease_time_interval
@@ -116,24 +195,7 @@ module Sidekiq
       @last_try_to_take_lease_at = Time.now.to_f
 
       Sidekiq.redis do |conn|
-        redis.set('reliable-fetcher-cleanup-lock', 1, nx: true, ex: @cleanup_interval)
-      end
-    end
-
-    def clean_working_queue!(queue)
-      Sidekiq.redis do |conn|
-        working_jobs = conn.lrange("#{queue}:#{WORKING_QUEUE}", 0, -1)
-        working_jobs.each do |job|
-          enqueued_at = Sidekiq.load_json(job)['enqueued_at'].to_i
-          job_duration = Time.now.to_i - enqueued_at
-
-          next if job_duration < @consider_dead_after
-
-          Sidekiq.logger.info "Requeued a dead job from #{queue}:#{WORKING_QUEUE}"
-
-          conn.lpush("#{queue}", job)
-          conn.lrem("#{queue}:#{WORKING_QUEUE}", 1, job)
-        end
+        conn.set('reliable-fetcher-cleanup-lock', 1, nx: true, ex: @cleanup_interval)
       end
     end
   end
