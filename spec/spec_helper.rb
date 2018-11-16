@@ -6,7 +6,7 @@ require 'simplecov'
 
 SimpleCov.start
 
-REDIS_URL = ENV['REDIS_URL'] || 'redis://localhost:6379'
+REDIS_URL = ENV['REDIS_URL'] || 'redis://localhost:6379/10'
 REDIS = Sidekiq::RedisConnection.create(:url => REDIS_URL)
 
 

@@ -18,7 +18,7 @@ module Sidekiq
 
     UnitOfWork = Struct.new(:queue, :job) do
       def acknowledge
-        Sidekiq.redis { |conn| conn.lrem("#{WORKING_QUEUE}:#{queue}:#{hostname}:#{::Process.pid}", 1, job) }
+        Sidekiq.redis { |conn| conn.lrem(Sidekiq::ReliableFetcher.working_queue_name(queue), 1, job) }
       end
 
       def hostname
@@ -32,8 +32,8 @@ module Sidekiq
       def requeue
         Sidekiq.redis do |conn|
           conn.pipelined do
-            conn.lpush("queue:#{queue_name}", job)
-            conn.lrem("#{WORKING_QUEUE}:queue:#{queue_name}:#{hostname}:#{::Process.pid}", 1, job)
+            conn.lpush(queue, job)
+            conn.lrem(Sidekiq::ReliableFetcher.working_queue_name(queue), 1, job)
           end
         end
       end
@@ -100,7 +100,7 @@ module Sidekiq
       return unless work
 
       unit_of_work = UnitOfWork.new(*work)
-      Sidekiq.redis { |conn| conn.lpush("#{WORKING_QUEUE}:#{unit_of_work.queue}:#{Socket.gethostname}:#{::Process.pid}", unit_of_work.job) }
+      Sidekiq.redis { |conn| conn.lpush(self.class.working_queue_name(unit_of_work.queue), unit_of_work.job) }
 
       unit_of_work
     end
@@ -108,7 +108,7 @@ module Sidekiq
     def reliable_fetch
       @queues_size.times do
         queue = @queues_iterator.next
-        work = Sidekiq.redis { |conn| conn.rpoplpush(queue, "#{WORKING_QUEUE}:#{queue}:#{Socket.gethostname}:#{::Process.pid}") }
+        work = Sidekiq.redis { |conn| conn.rpoplpush(queue, self.class.working_queue_name(queue)) }
         return UnitOfWork.new(queue, work) if work
       end
 
@@ -133,8 +133,8 @@ module Sidekiq
       Sidekiq.redis do |conn|
         conn.pipelined do
           inprogress.each do |unit_of_work|
-            conn.lpush("#{unit_of_work.queue}", unit_of_work.job)
-            conn.lrem("#{WORKING_QUEUE}:#{unit_of_work.queue}:#{Socket.gethostname}:#{::Process.pid}", 1, unit_of_work.job)
+            conn.lpush(unit_of_work.queue, unit_of_work.job)
+            conn.lrem(working_queue_name(unit_of_work.queue), 1, unit_of_work.job)
           end
         end
       end
@@ -165,12 +165,16 @@ module Sidekiq
 
     def self.worker_dead?(hostname, pid)
       Sidekiq.redis do |conn|
-        !conn.get(heartbeat_key(hostname,pid))
+        !conn.get(heartbeat_key(hostname, pid))
       end
     end
 
     def self.heartbeat_key(hostname, pid)
       "reliable-fetcher-heartbeat-#{hostname}-#{pid}"
+    end
+
+    def self.working_queue_name(queue)
+      "#{WORKING_QUEUE}:#{queue}:#{Socket.gethostname}:#{::Process.pid}"
     end
 
     def self.clean_working_queue!(working_queue)
@@ -183,7 +187,7 @@ module Sidekiq
           count += 1
         end
 
-        Sidekiq.logger.info "Requeued #{count} dead job"
+        Sidekiq.logger.info "Requeued #{count} dead jobs to #{original_queue}"
       end
     end
 
