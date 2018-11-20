@@ -4,9 +4,7 @@ require 'sidekiq/reliable_fetcher'
 describe Sidekiq::ReliableFetcher do
   before do
     Sidekiq.redis = { url: REDIS_URL }
-    Sidekiq.redis do |conn|
-      conn.flushdb
-    end
+    Sidekiq.redis(&:flushdb)
   end
 
   after do
@@ -100,7 +98,7 @@ describe Sidekiq::ReliableFetcher do
 
         uow = fetcher.retrieve_work
 
-        expect{uow.acknowledge}.to change{working_queue_size('basic')}.by(-1)
+        expect{ uow.acknowledge }.to change{ working_queue_size('basic') }.by(-1)
 
         expect(Sidekiq::Queue.new('basic').size).to eq 0
       end
@@ -128,7 +126,8 @@ describe Sidekiq::ReliableFetcher do
       expect(queue2.size).to eq 0
 
       uow = described_class::UnitOfWork
-      described_class.bulk_requeue([uow.new('queue:foo', 'bob'), uow.new('queue:foo', 'bar'), uow.new('queue:bar', 'widget')], {queues: []})
+      jobs = [ uow.new('queue:foo', 'bob'), uow.new('queue:foo', 'bar'), uow.new('queue:bar', 'widget') ]
+      described_class.bulk_requeue(jobs, { queues: [] })
 
       expect(queue1.size).to eq 2
       expect(queue2.size).to eq 1

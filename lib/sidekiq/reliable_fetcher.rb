@@ -1,7 +1,8 @@
 # frozen_string_literal: true
+
 module Sidekiq
   class ReliableFetcher
-    WORKING_QUEUE            = 'working'
+    WORKING_QUEUE            = 'working'.freeze
     CLEANUP_INTERVAL         = 60 * 60 # 1 hour
 
     # TAKE_LEASE_TIME_INTERVAL defines how often we try to take a lease
@@ -42,7 +43,7 @@ module Sidekiq
     def self.setup_reliable_fetch!(config)
       config.options[:fetch] = Sidekiq::ReliableFetcher
 
-      Sidekiq.logger.info { "GitLab reliable fetch activated!" }
+      Sidekiq.logger.info('GitLab reliable fetch activated!')
 
       start_heartbeat_thread
     end
@@ -55,7 +56,7 @@ module Sidekiq
 
             sleep HEARTBEAT_INTERVAL
           rescue => e
-            Sidekiq.logger.error { "Heartbeat thread error: #{e.message}" }
+            Sidekiq.logger.error("Heartbeat thread error: #{e.message}")
           end
         end
       end
@@ -69,17 +70,17 @@ module Sidekiq
         conn.set(heartbeat_key(hostname, pid), 1, ex: HEARTBEAT_INTERVAL * 2)
       end
 
-      Sidekiq.logger.debug { "Heartbeat for hostname: #{hostname} and pid: #{pid}" }
+      Sidekiq.logger.debug("Heartbeat for hostname: #{hostname} and pid: #{pid}")
     end
 
     def initialize(options)
       @queues = options[:queues].map { |q| "queue:#{q}" }.shuffle
 
       @queues_iterator = @queues.cycle
-      @queues_size  = @queues.size
+      @queues_size = @queues.size
 
       @cleanup_interval = options[:cleanup_interval] || CLEANUP_INTERVAL
-      @take_lease_time_interval = options[:take_lease_time_interval]  || TAKE_LEASE_TIME_INTERVAL
+      @take_lease_time_interval = options[:take_lease_time_interval] || TAKE_LEASE_TIME_INTERVAL
       @last_try_to_take_lease_at = 0
 
       @semi_reliable_fetch = options[:semi_reliable_fetch]
@@ -100,7 +101,10 @@ module Sidekiq
       return unless work
 
       unit_of_work = UnitOfWork.new(*work)
-      Sidekiq.redis { |conn| conn.lpush(self.class.working_queue_name(unit_of_work.queue), unit_of_work.job) }
+
+      Sidekiq.redis do |conn|
+        conn.lpush(self.class.working_queue_name(unit_of_work.queue), unit_of_work.job)
+      end
 
       unit_of_work
     end
@@ -108,7 +112,11 @@ module Sidekiq
     def reliable_fetch
       @queues_size.times do
         queue = @queues_iterator.next
-        work = Sidekiq.redis { |conn| conn.rpoplpush(queue, self.class.working_queue_name(queue)) }
+
+        work = Sidekiq.redis do |conn|
+          conn.rpoplpush(queue, self.class.working_queue_name(queue))
+        end
+
         return UnitOfWork.new(queue, work) if work
       end
 
@@ -125,10 +133,10 @@ module Sidekiq
       queues
     end
 
-    def self.bulk_requeue(inprogress, options)
+    def self.bulk_requeue(inprogress, _options)
       return if inprogress.empty?
 
-      Sidekiq.logger.debug { "Re-queueing terminated jobs" }
+      Sidekiq.logger.debug('Re-queueing terminated jobs')
 
       Sidekiq.redis do |conn|
         conn.pipelined do
@@ -140,14 +148,14 @@ module Sidekiq
       end
 
       Sidekiq.logger.info("Pushed #{inprogress.size} jobs back to Redis")
-    rescue => ex
-      Sidekiq.logger.warn("Failed to requeue #{inprogress.size} jobs: #{ex.message}")
+    rescue => e
+      Sidekiq.logger.warn("Failed to requeue #{inprogress.size} jobs: #{e.message}")
     end
 
     # Detect "old" jobs and requeue them because the worker they were assigned
     # to probably failed miserably.
     def self.clean_working_queues!
-      Sidekiq.logger.info "Cleaning working queues"
+      Sidekiq.logger.info("Cleaning working queues")
 
       Sidekiq.redis do |conn|
         conn.scan_each(match: "#{WORKING_QUEUE}:queue:*", count: SCAN_COUNT) do |key|
@@ -156,9 +164,7 @@ module Sidekiq
 
           continue if hostname.nil? || pid.nil?
 
-          if worker_dead?(hostname, pid)
-            clean_working_queue!(key)
-          end
+          clean_working_queue!(key) if worker_dead?(hostname, pid)
         end
       end
     end
@@ -183,11 +189,9 @@ module Sidekiq
       Sidekiq.redis do |conn|
         count = 0
 
-        while conn.rpoplpush(working_queue, original_queue)
-          count += 1
-        end
+        count += 1 while conn.rpoplpush(working_queue, original_queue)
 
-        Sidekiq.logger.info "Requeued #{count} dead jobs to #{original_queue}"
+        Sidekiq.logger.info("Requeued #{count} dead jobs to #{original_queue}")
       end
     end
 

@@ -7,11 +7,11 @@ require 'simplecov'
 SimpleCov.start
 
 REDIS_URL = ENV['REDIS_URL'] || 'redis://localhost:6379/10'
-REDIS = Sidekiq::RedisConnection.create(:url => REDIS_URL)
+REDIS = Sidekiq::RedisConnection.create(url: REDIS_URL)
 
 
 Sidekiq.configure_client do |config|
-  config.redis = { :url => REDIS_URL }
+  config.redis = { url: REDIS_URL }
 end
 
 Sidekiq.logger.level = Logger::ERROR
