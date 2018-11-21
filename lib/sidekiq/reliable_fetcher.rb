@@ -3,16 +3,18 @@
 module Sidekiq
   class ReliableFetcher
     WORKING_QUEUE            = 'working'.freeze
-    CLEANUP_INTERVAL         = 60 * 60 # 1 hour
+    DEFAULT_CLEANUP_INTERVAL = 60 * 60 # 1 hour
 
-    # TAKE_LEASE_TIME_INTERVAL defines how often we try to take a lease
+    # DEFAULT_LEASE_TIME_INTERVAL defines how often we try to take a lease
     # to not flood our Redis server with SET requests
-    TAKE_LEASE_TIME_INTERVAL = 2 * 60
-    IDLE_TIMEOUT             = 5 # seconds
-    HEARTBEAT_INTERVAL       = 30 # seconds
+    DEFAULT_LEASE_TIME_INTERVAL = 2 * 60 # seconds
+    IDLE_TIMEOUT                = 5      # seconds
+    HEARTBEAT_INTERVAL          = 30     # seconds
+    LEASE_KEY                   = 'reliable-fetcher-cleanup-lock'
+
     # We want the fetch operation to timeout every few seconds so the thread
     # can check if the process is shutting down. This constant is only used for semi-reliable fetch
-    SEMI_RELIABLE_FETCH_TIMEOUT = 2
+    SEMI_RELIABLE_FETCH_TIMEOUT = 2 # seconds
 
     # Defines the COUNT parameter that will be passed to Redis SCAN command
     SCAN_COUNT = 1000
@@ -20,10 +22,6 @@ module Sidekiq
     UnitOfWork = Struct.new(:queue, :job) do
       def acknowledge
         Sidekiq.redis { |conn| conn.lrem(Sidekiq::ReliableFetcher.working_queue_name(queue), 1, job) }
-      end
-
-      def hostname
-        @hostname ||= Socket.gethostname
       end
 
       def queue_name
@@ -62,10 +60,15 @@ module Sidekiq
       end
     end
 
-    def self.heartbeat
-      hostname = Socket.gethostname
-      pid = ::Process.pid
+    def self.pid
+      @@pid ||= ::Process.pid
+    end
 
+    def self.hostname
+      @@hostname ||= Socket.gethostname
+    end
+
+    def self.heartbeat
       Sidekiq.redis do |conn|
         conn.set(heartbeat_key(hostname, pid), 1, ex: HEARTBEAT_INTERVAL * 2)
       end
@@ -79,15 +82,15 @@ module Sidekiq
       @queues_iterator = @queues.cycle
       @queues_size = @queues.size
 
-      @cleanup_interval = options[:cleanup_interval] || CLEANUP_INTERVAL
-      @take_lease_time_interval = options[:take_lease_time_interval] || TAKE_LEASE_TIME_INTERVAL
+      @cleanup_interval = options.fetch(:cleanup_interval, DEFAULT_CLEANUP_INTERVAL)
+      @lease_time_interval = options.fetch(:lease_time_interval, DEFAULT_LEASE_TIME_INTERVAL)
       @last_try_to_take_lease_at = 0
 
       @semi_reliable_fetch = options[:semi_reliable_fetch]
     end
 
     def retrieve_work
-      self.class.clean_working_queues! if take_lease
+      clean_working_queues! if take_lease
 
       if @semi_reliable_fetch
         semi_reliable_fetch
@@ -95,6 +98,35 @@ module Sidekiq
         reliable_fetch
       end
     end
+
+    def self.bulk_requeue(inprogress, _options)
+      return if inprogress.empty?
+
+      Sidekiq.logger.debug('Re-queueing terminated jobs')
+
+      Sidekiq.redis do |conn|
+        conn.pipelined do
+          inprogress.each do |unit_of_work|
+            conn.lpush(unit_of_work.queue, unit_of_work.job)
+            conn.lrem(working_queue_name(unit_of_work.queue), 1, unit_of_work.job)
+          end
+        end
+      end
+
+      Sidekiq.logger.info("Pushed #{inprogress.size} jobs back to Redis")
+    rescue => e
+      Sidekiq.logger.warn("Failed to requeue #{inprogress.size} jobs: #{e.message}")
+    end
+
+    def self.heartbeat_key(hostname, pid)
+      "reliable-fetcher-heartbeat-#{hostname}-#{pid}"
+    end
+
+    def self.working_queue_name(queue)
+      "#{WORKING_QUEUE}:#{queue}:#{hostname}:#{pid}"
+    end
+
+    private
 
     def semi_reliable_fetch
       work = Sidekiq.redis { |conn| conn.brpop(*queues_cmd) }
@@ -133,28 +165,23 @@ module Sidekiq
       queues
     end
 
-    def self.bulk_requeue(inprogress, _options)
-      return if inprogress.empty?
-
-      Sidekiq.logger.debug('Re-queueing terminated jobs')
+    def clean_working_queue!(working_queue)
+      original_queue = working_queue.gsub(/#{WORKING_QUEUE}:|:[^:]*:[0-9]*\z/, '')
 
       Sidekiq.redis do |conn|
-        conn.pipelined do
-          inprogress.each do |unit_of_work|
-            conn.lpush(unit_of_work.queue, unit_of_work.job)
-            conn.lrem(working_queue_name(unit_of_work.queue), 1, unit_of_work.job)
-          end
-        end
-      end
+        count = 0
 
-      Sidekiq.logger.info("Pushed #{inprogress.size} jobs back to Redis")
-    rescue => e
-      Sidekiq.logger.warn("Failed to requeue #{inprogress.size} jobs: #{e.message}")
+        while conn.rpoplpush(working_queue, original_queue) do
+          count += 1
+        end
+
+        Sidekiq.logger.info("Requeued #{count} dead jobs to #{original_queue}")
+      end
     end
 
     # Detect "old" jobs and requeue them because the worker they were assigned
     # to probably failed miserably.
-    def self.clean_working_queues!
+    def clean_working_queues!
       Sidekiq.logger.info("Cleaning working queues")
 
       Sidekiq.redis do |conn|
@@ -169,42 +196,24 @@ module Sidekiq
       end
     end
 
-    def self.worker_dead?(hostname, pid)
+    def worker_dead?(hostname, pid)
       Sidekiq.redis do |conn|
-        !conn.get(heartbeat_key(hostname, pid))
+        !conn.get(self.class.heartbeat_key(hostname, pid))
       end
     end
-
-    def self.heartbeat_key(hostname, pid)
-      "reliable-fetcher-heartbeat-#{hostname}-#{pid}"
-    end
-
-    def self.working_queue_name(queue)
-      "#{WORKING_QUEUE}:#{queue}:#{Socket.gethostname}:#{::Process.pid}"
-    end
-
-    def self.clean_working_queue!(working_queue)
-      original_queue = working_queue.gsub(/#{WORKING_QUEUE}:|:[^:]*:[0-9]*\z/, '')
-
-      Sidekiq.redis do |conn|
-        count = 0
-
-        count += 1 while conn.rpoplpush(working_queue, original_queue)
-
-        Sidekiq.logger.info("Requeued #{count} dead jobs to #{original_queue}")
-      end
-    end
-
-    private
 
     def take_lease
-      return unless Time.now.to_f - @last_try_to_take_lease_at > @take_lease_time_interval
+      return unless allowed_to_take_a_lease?
 
       @last_try_to_take_lease_at = Time.now.to_f
 
       Sidekiq.redis do |conn|
-        conn.set('reliable-fetcher-cleanup-lock', 1, nx: true, ex: @cleanup_interval)
+        conn.set(LEASE_KEY, 1, nx: true, ex: @cleanup_interval)
       end
+    end
+
+    def allowed_to_take_a_lease?
+      Time.now.to_f - @last_try_to_take_lease_at > @lease_time_interval
     end
   end
 end

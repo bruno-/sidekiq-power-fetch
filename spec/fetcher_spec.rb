@@ -63,7 +63,7 @@ describe Sidekiq::ReliableFetcher do
       end
 
       it 'does not clean up orphaned jobs more than once per cleanup interval' do
-        expect(described_class).to receive(:clean_working_queues!).once
+        expect_any_instance_of(described_class).to receive(:clean_working_queues!).once
 
         threads = []
         10.times do
