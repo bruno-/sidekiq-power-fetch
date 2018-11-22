@@ -154,7 +154,7 @@ describe Sidekiq::ReliableFetcher do
   end
 
   def other_process_working_queue_name(queue)
-    "#{described_class::WORKING_QUEUE}:queue:#{queue}:#{Socket.gethostname}:#{::Process.pid + 1}"
+    "#{described_class::WORKING_QUEUE_PREFIX}:queue:#{queue}:#{Socket.gethostname}:#{::Process.pid + 1}"
   end
 
   def live_other_process_working_queue_name(queue)
@@ -165,6 +165,6 @@ describe Sidekiq::ReliableFetcher do
       conn.set(described_class.heartbeat_key(hostname, pid), 1)
     end
 
-    "#{described_class::WORKING_QUEUE}:queue:#{queue}:#{hostname}:#{pid}"
+    "#{described_class::WORKING_QUEUE_PREFIX}:queue:#{queue}:#{hostname}:#{pid}"
   end
 end

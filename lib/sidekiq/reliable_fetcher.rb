@@ -2,19 +2,22 @@
 
 module Sidekiq
   class ReliableFetcher
-    WORKING_QUEUE            = 'working'.freeze
+    WORKING_QUEUE_PREFIX            = 'working'.freeze
     DEFAULT_CLEANUP_INTERVAL = 60 * 60 # 1 hour
 
-    # DEFAULT_LEASE_TIME_INTERVAL defines how often we try to take a lease
+    # DEFAULT_LEASE_INTERVAL defines how often we try to take a lease
     # to not flood our Redis server with SET requests
-    DEFAULT_LEASE_TIME_INTERVAL = 2 * 60 # seconds
-    IDLE_TIMEOUT                = 5      # seconds
+    DEFAULT_LEASE_INTERVAL      = 2 * 60 # seconds
     HEARTBEAT_INTERVAL          = 30     # seconds
     LEASE_KEY                   = 'reliable-fetcher-cleanup-lock'
 
     # We want the fetch operation to timeout every few seconds so the thread
     # can check if the process is shutting down. This constant is only used for semi-reliable fetch
     SEMI_RELIABLE_FETCH_TIMEOUT = 2 # seconds
+
+    # For reliable fetch we don't use Redis' blocking operations so
+    # we inject a regular sleep into the loop
+    RELIABLE_FETCH_IDLE_TIMEOUT = 5 # seconds
 
     # Defines the COUNT parameter that will be passed to Redis SCAN command
     SCAN_COUNT = 1000
@@ -76,29 +79,6 @@ module Sidekiq
       Sidekiq.logger.debug("Heartbeat for hostname: #{hostname} and pid: #{pid}")
     end
 
-    def initialize(options)
-      @queues = options[:queues].map { |q| "queue:#{q}" }.shuffle
-
-      @queues_iterator = @queues.cycle
-      @queues_size = @queues.size
-
-      @cleanup_interval = options.fetch(:cleanup_interval, DEFAULT_CLEANUP_INTERVAL)
-      @lease_time_interval = options.fetch(:lease_time_interval, DEFAULT_LEASE_TIME_INTERVAL)
-      @last_try_to_take_lease_at = 0
-
-      @semi_reliable_fetch = options[:semi_reliable_fetch]
-    end
-
-    def retrieve_work
-      clean_working_queues! if take_lease
-
-      if @semi_reliable_fetch
-        semi_reliable_fetch
-      else
-        reliable_fetch
-      end
-    end
-
     def self.bulk_requeue(inprogress, _options)
       return if inprogress.empty?
 
@@ -123,7 +103,33 @@ module Sidekiq
     end
 
     def self.working_queue_name(queue)
-      "#{WORKING_QUEUE}:#{queue}:#{hostname}:#{pid}"
+      "#{WORKING_QUEUE_PREFIX}:#{queue}:#{hostname}:#{pid}"
+    end
+
+    attr_reader :queues_iterator, :queues_size, :queues, :cleanup_interval,
+                :lease_time_interval, :use_semi_reliable_fetch
+
+    def initialize(options)
+      @queues = options[:queues].map { |q| "queue:#{q}" }.shuffle
+
+      @queues_iterator = queues.cycle
+      @queues_size = queues.size
+
+      @cleanup_interval = options.fetch(:cleanup_interval, DEFAULT_CLEANUP_INTERVAL)
+      @lease_time_interval = options.fetch(:lease_time_interval, DEFAULT_LEASE_INTERVAL)
+      @last_try_to_take_lease_at = 0
+
+      use_semi_reliable_fetch = options[:semi_reliable_fetch]
+    end
+
+    def retrieve_work
+      clean_working_queues! if take_lease
+
+      if use_semi_reliable_fetch
+        semi_reliable_fetch
+      else
+        reliable_fetch
+      end
     end
 
     private
@@ -143,7 +149,7 @@ module Sidekiq
 
     def reliable_fetch
       @queues_size.times do
-        queue = @queues_iterator.next
+        queue = queues_iterator.next
 
         work = Sidekiq.redis do |conn|
           conn.rpoplpush(queue, self.class.working_queue_name(queue))
@@ -154,19 +160,17 @@ module Sidekiq
 
       # We didn't find a job in any of the configured queues. Let's sleep a bit
       # to avoid uselessly burning too much CPU
-      sleep(IDLE_TIMEOUT)
+      sleep(RELIABLE_FETCH_IDLE_TIMEOUT)
 
       nil
     end
 
     def queues_cmd
-      queues = @queues.uniq
-      queues << SEMI_RELIABLE_FETCH_TIMEOUT
-      queues
+      queues.uniq + [SEMI_RELIABLE_FETCH_TIMEOUT]
     end
 
     def clean_working_queue!(working_queue)
-      original_queue = working_queue.gsub(/#{WORKING_QUEUE}:|:[^:]*:[0-9]*\z/, '')
+      original_queue = working_queue.gsub(/#{WORKING_QUEUE_PREFIX}:|:[^:]*:[0-9]*\z/, '')
 
       Sidekiq.redis do |conn|
         count = 0
@@ -185,7 +189,7 @@ module Sidekiq
       Sidekiq.logger.info("Cleaning working queues")
 
       Sidekiq.redis do |conn|
-        conn.scan_each(match: "#{WORKING_QUEUE}:queue:*", count: SCAN_COUNT) do |key|
+        conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
           # Example: "working:name_of_the_job:queue:{hostname}:{PID}"
           hostname, pid = key.scan(/:([^:]*):([0-9]*)\z/).flatten
 
@@ -208,12 +212,12 @@ module Sidekiq
       @last_try_to_take_lease_at = Time.now.to_f
 
       Sidekiq.redis do |conn|
-        conn.set(LEASE_KEY, 1, nx: true, ex: @cleanup_interval)
+        conn.set(LEASE_KEY, 1, nx: true, ex: cleanup_interval)
       end
     end
 
     def allowed_to_take_a_lease?
-      Time.now.to_f - @last_try_to_take_lease_at > @lease_time_interval
+      Time.now.to_f - @last_try_to_take_lease_at > lease_time_interval
     end
   end
 end
