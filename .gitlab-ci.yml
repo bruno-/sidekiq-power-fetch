@@ -22,6 +22,32 @@ rspec:
     paths:
       - coverage/
 
+.integration:
+  stage: test
+  script:
+    - cd test
+    - bundle exec ruby reliability_test.rb
+  services:
+    - redis:alpine
+
+integration_semi:
+  extends: .integration
+  variables:
+    JOB_FETCHER: semi
+
+integration_reliable:
+  extends: .integration
+  variables:
+    JOB_FETCHER: reliable
+
+
+integration_base:
+  extends: .integration
+  allow_failure: yes
+  variables:
+    JOB_FETCHER: base
+
+
 # rubocop:
 #   script:
 #     - bundle exec rubocop
