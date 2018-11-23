@@ -2,21 +2,22 @@
 
 module Sidekiq
   class ReliableFetcher
-    WORKING_QUEUE_PREFIX            = 'working'.freeze
-    DEFAULT_CLEANUP_INTERVAL = 60 * 60 # 1 hour
+    DEFAULT_CLEANUP_INTERVAL    = 60 * 60 # 1 hour
+    HEARTBEAT_INTERVAL          = 30      # seconds
+    WORKING_QUEUE_PREFIX        = 'working'.freeze
 
-    # DEFAULT_LEASE_INTERVAL defines how often we try to take a lease
-    # to not flood our Redis server with SET requests
+    # Defines how often we try to take a lease to not flood our
+    # Redis server with SET requests
     DEFAULT_LEASE_INTERVAL      = 2 * 60 # seconds
-    HEARTBEAT_INTERVAL          = 30     # seconds
-    LEASE_KEY                   = 'reliable-fetcher-cleanup-lock'
+    LEASE_KEY                   = 'reliable-fetcher-cleanup-lock'.freeze
 
     # We want the fetch operation to timeout every few seconds so the thread
-    # can check if the process is shutting down. This constant is only used for semi-reliable fetch
+    # can check if the process is shutting down. This constant is only used
+    # for semi-reliable fetch.
     SEMI_RELIABLE_FETCH_TIMEOUT = 2 # seconds
 
     # For reliable fetch we don't use Redis' blocking operations so
-    # we inject a regular sleep into the loop
+    # we inject a regular sleep into the loop.
     RELIABLE_FETCH_IDLE_TIMEOUT = 5 # seconds
 
     # Defines the COUNT parameter that will be passed to Redis SCAN command
@@ -106,20 +107,17 @@ module Sidekiq
       "#{WORKING_QUEUE_PREFIX}:#{queue}:#{hostname}:#{pid}"
     end
 
-    attr_reader :queues_iterator, :queues_size, :queues, :cleanup_interval,
-                :lease_time_interval, :use_semi_reliable_fetch
+    attr_reader :cleanup_interval, :last_try_to_take_lease_at, :lease_time_interval,
+                :queues, :queues_iterator, :queues_size, :use_semi_reliable_fetch
 
     def initialize(options)
       @queues = options[:queues].map { |q| "queue:#{q}" }.shuffle
-
       @queues_iterator = queues.cycle
       @queues_size = queues.size
-
       @cleanup_interval = options.fetch(:cleanup_interval, DEFAULT_CLEANUP_INTERVAL)
       @lease_time_interval = options.fetch(:lease_time_interval, DEFAULT_LEASE_INTERVAL)
       @last_try_to_take_lease_at = 0
-
-      use_semi_reliable_fetch = options[:semi_reliable_fetch]
+      @use_semi_reliable_fetch = options[:semi_reliable_fetch]
     end
 
     def retrieve_work
@@ -148,7 +146,7 @@ module Sidekiq
     end
 
     def reliable_fetch
-      @queues_size.times do
+      queues_size.times do
         queue = queues_iterator.next
 
         work = Sidekiq.redis do |conn|
@@ -217,7 +215,7 @@ module Sidekiq
     end
 
     def allowed_to_take_a_lease?
-      Time.now.to_f - @last_try_to_take_lease_at > lease_time_interval
+      Time.now.to_f - last_try_to_take_lease_at > lease_time_interval
     end
   end
 end
