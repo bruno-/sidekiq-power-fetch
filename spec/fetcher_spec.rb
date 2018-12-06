@@ -3,12 +3,7 @@ require 'sidekiq/reliable_fetcher'
 
 describe Sidekiq::ReliableFetcher do
   before do
-    Sidekiq.redis = { url: REDIS_URL }
     Sidekiq.redis(&:flushdb)
-  end
-
-  after do
-    Sidekiq.redis = REDIS
   end
 
   shared_examples 'Sidekiq fetcher' do
