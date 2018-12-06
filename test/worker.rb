@@ -1,21 +1,12 @@
 class TestWorker
   include Sidekiq::Worker
 
-  sidekiq_options retry: false
-
   def perform
-    sleep 2
+    # To mimic long running job and to increase the probability of losing the job
+    sleep 1
 
     Sidekiq.redis do |redis|
-      # As we disabled retries, this counter is a number of unique jobs + possible duplicates
-      redis.incr('reliable-fetcher-counter')
-
-      if redis.get("reliable-fetcher-jid-#{get_sidekiq_job_id}")
-        # As we disabled retries, this counter is a number of duplicates
-        redis.incr("reliable-fetcher-duplicate-counter")
-      else
-        redis.set("reliable-fetcher-jid-#{get_sidekiq_job_id}", 1)
-      end
+      redis.lpush(REDIS_FINISHED_LIST, get_sidekiq_job_id)
     end
   end
 

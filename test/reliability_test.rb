@@ -66,7 +66,7 @@ def current_queue_size
 end
 
 def duplicates
-  Sidekiq.redis { |c| c.get('reliable-fetcher-duplicate-counter') }
+  Sidekiq.redis { |c| c.llen(REDIS_FINISHED_LIST) }
 end
 
 # Splits array into two halves
@@ -84,18 +84,32 @@ puts '########################################'
 
 Sidekiq.redis(&:flushdb)
 
-NUMBER_OF_JOBS.times { TestWorker.perform_async }
+jobs = []
+
+Sidekiq.redis do |c|
+  NUMBER_OF_JOBS.times do
+    jobs << TestWorker.perform_async
+  end
+end
+
 puts "Queued #{NUMBER_OF_JOBS} jobs"
 
 spawn_workers_and_stop_them_on_a_half_way
 spawn_workers_and_let_them_finish
 
-counter = Sidekiq.redis { |c| c.get('reliable-fetcher-counter') }
+jobs_lost = 0
 
-puts "Counter: #{counter} (Should be: #{NUMBER_OF_JOBS}, Lost: #{NUMBER_OF_JOBS - counter.to_i})"
-puts "Duplicates found: #{duplicates || 'No' }"
+Sidekiq.redis do |redis|
+  jobs.each do |job|
+    next if redis.lrem(REDIS_FINISHED_LIST, 1, job) == 1
+    jobs_lost += 1
+  end
+end
 
-if NUMBER_OF_JOBS == counter.to_i && duplicates.nil?
+puts "Remaining unprocessed: #{jobs_lost}"
+puts "Duplicates found: #{duplicates}"
+
+if jobs_lost.zero? && duplicates.zero?
   exit 0
 else
   exit 1
