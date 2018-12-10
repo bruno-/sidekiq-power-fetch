@@ -113,16 +113,19 @@ module Sidekiq
     end
 
     attr_reader :cleanup_interval, :last_try_to_take_lease_at, :lease_interval,
-                :queues, :queues_iterator, :queues_size, :use_semi_reliable_fetch
+                :queues, :queues_iterator, :queues_size, :use_semi_reliable_fetch,
+                :strictly_ordered_queues
 
     def initialize(options)
-      @queues = options[:queues].map { |q| "queue:#{q}" }.shuffle
-      @queues_iterator = queues.cycle
-      @queues_size = queues.size
       @cleanup_interval = options.fetch(:cleanup_interval, DEFAULT_CLEANUP_INTERVAL)
       @lease_interval = options.fetch(:lease_interval, DEFAULT_LEASE_INTERVAL)
       @last_try_to_take_lease_at = 0
       @use_semi_reliable_fetch = options[:semi_reliable_fetch]
+      @strictly_ordered_queues = !!options[:strict]
+
+      @queues = options[:queues].map { |q| "queue:#{q}" }
+
+      setup_queues
     end
 
     def retrieve_work
@@ -136,6 +139,18 @@ module Sidekiq
     end
 
     private
+
+    def setup_queues
+      if use_semi_reliable_fetch
+        if strictly_ordered_queues
+          @queues = @queues.uniq
+          @queues << SEMI_RELIABLE_FETCH_TIMEOUT
+        end
+      else
+        @queues_size = queues.size
+        @queues_iterator = queues.cycle
+      end
+    end
 
     def semi_reliable_fetch
       work = Sidekiq.redis { |conn| conn.brpop(*queues_cmd) }
@@ -151,6 +166,10 @@ module Sidekiq
     end
 
     def reliable_fetch
+      if strictly_ordered_queues
+        @queues_iterator.rewind
+      end
+
       queues_size.times do
         queue = queues_iterator.next
 
@@ -169,7 +188,13 @@ module Sidekiq
     end
 
     def queues_cmd
-      queues.uniq + [SEMI_RELIABLE_FETCH_TIMEOUT]
+      if strictly_ordered_queues
+        @queues
+      else
+        queues = @queues.shuffle.uniq
+        queues << SEMI_RELIABLE_FETCH_TIMEOUT
+        queues
+      end
     end
 
     def clean_working_queue!(working_queue)

@@ -71,6 +71,54 @@ describe Sidekiq::ReliableFetcher do
     end
   end
 
+  context 'Order of fetching' do
+    shared_examples 'strictly ordered queues' do
+      it 'retrieves by order when strictly order is enabled' do
+        Sidekiq.redis do |conn|
+          conn.rpush('queue:first', ['msg3', 'msg2', 'msg1'])
+          conn.rpush('queue:second', 'msg4')
+        end
+
+        jobs = (1..4).map { fetcher.retrieve_work.job }
+
+        expect(jobs).to eq ['msg1', 'msg2', 'msg3', 'msg4']
+      end
+    end
+
+    shared_examples 'random ordered queues' do
+      it 'does not starve any queue when queues are not strictly ordered' do
+        Sidekiq.redis do |conn|
+          conn.rpush('queue:first', (1..200).map { |i| "msg#{i}"})
+          conn.rpush('queue:second', 'this_job_should_not_stuck')
+        end
+
+        jobs = (1..100).map { fetcher.retrieve_work.job }
+
+        expect(jobs).to include 'this_job_should_not_stuck'
+      end
+    end
+
+    context 'Reliable fetch' do
+      it_behaves_like 'strictly ordered queues' do
+        let(:fetcher) { described_class.new(strict: true, queues: ['first', 'second']) }
+      end
+
+      it_behaves_like 'random ordered queues' do
+        let(:fetcher) { described_class.new(queues: ['first', 'second']) }
+      end
+    end
+
+    context 'Semi-reliable' do
+      it_behaves_like 'strictly ordered queues' do
+        let(:fetcher) { described_class.new(queues: ['first', 'second'], strict: true, semi_reliable_fetch: true) }
+      end
+
+      it_behaves_like 'random ordered queues' do
+        let(:fetcher) { described_class.new(queues: ['first', 'second'], semi_reliable_fetch: true) }
+      end
+    end
+  end
+
   describe 'UnitOfWork' do
     let(:fetcher) { described_class.new(queues: ['basic']) }
 
