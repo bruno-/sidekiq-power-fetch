@@ -8,9 +8,7 @@ Gem::Specification.new do |s|
   s.summary     = 'Reliable fetch extension for Sidekiq'
   s.description = 'Redis reliable queue pattern implemented in Sidekiq'
   s.require_paths = ['lib']
-
   s.files = `git ls-files`.split($\)
   s.test_files  = []
-
   s.add_dependency 'sidekiq', '~> 5'
 end
