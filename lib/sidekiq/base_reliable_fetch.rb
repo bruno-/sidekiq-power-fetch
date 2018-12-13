@@ -2,15 +2,16 @@
 
 module Sidekiq
   class BaseReliableFetch
-    DEFAULT_CLEANUP_INTERVAL    = 60 * 60 # 1 hour
-    HEARTBEAT_INTERVAL          = 20     # seconds
-    HEARTBEAT_LIFESPAN          = 60     # seconds
-    WORKING_QUEUE_PREFIX        = 'working'
+    DEFAULT_CLEANUP_INTERVAL = 60 * 60  # 1 hour
+    HEARTBEAT_INTERVAL       = 20       # seconds
+    HEARTBEAT_LIFESPAN       = 60       # seconds
+    HEARTBEAT_RETRY_DELAY    = 1        # seconds
+    WORKING_QUEUE_PREFIX     = 'working'
 
     # Defines how often we try to take a lease to not flood our
     # Redis server with SET requests
-    DEFAULT_LEASE_INTERVAL      = 2 * 60 # seconds
-    LEASE_KEY                   = 'reliable-fetcher-cleanup-lock'
+    DEFAULT_LEASE_INTERVAL = 2 * 60 # seconds
+    LEASE_KEY              = 'reliable-fetcher-cleanup-lock'
 
     # Defines the COUNT parameter that will be passed to Redis SCAN command
     SCAN_COUNT = 1000
@@ -55,6 +56,8 @@ module Sidekiq
             sleep HEARTBEAT_INTERVAL
           rescue => e
             Sidekiq.logger.error("Heartbeat thread error: #{e.message}")
+
+            sleep HEARTBEAT_RETRY_DELAY
           end
         end
       end
