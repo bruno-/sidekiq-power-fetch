@@ -25,7 +25,7 @@ Enable reliable fetches by calling this gem from your Sidekiq configuration:
 
 ```ruby
 Sidekiq.configure_server do |config|
-  Sidekiq::ReliableFetcher.setup_reliable_fetch!(config)
+  Sidekiq::ReliableFetch.setup_reliable_fetch!(config)
 
   # …
 end
@@ -35,9 +35,9 @@ There is an additional parameter `config.options[:semi_reliable_fetch]` you can 
 
 ```ruby
 Sidekiq.configure_server do |config|
-  Sidekiq::ReliableFetcher.setup_reliable_fetch!(config)
-
   config.options[:semi_reliable_fetch] = true # Default value is false
+
+  Sidekiq::ReliableFetch.setup_reliable_fetch!(config)
 end
 ```
 

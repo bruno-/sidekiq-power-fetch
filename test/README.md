@@ -28,7 +28,7 @@ cd test
 JOB_FETCHER=semi bundle exec ruby reliability_test.rb
 ```
 
-JOB_FETCHER can be set to one of these values: `semi`, `reliable`, `base`
+JOB_FETCHER can be set to one of these values: `semi`, `reliable`, `basic`
 
 To run both kind of tests you need to have redis server running on default HTTP port `6379`. To use other HTTP port, you can define
 `REDIS_URL` environment varible with the port you need(example: `REDIS_URL="redis://localhost:9999"`).

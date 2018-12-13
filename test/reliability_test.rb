@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'sidekiq'
 require 'sidekiq/util'
 require 'sidekiq/cli'
@@ -86,10 +88,8 @@ Sidekiq.redis(&:flushdb)
 
 jobs = []
 
-Sidekiq.redis do |c|
-  NUMBER_OF_JOBS.times do
-    jobs << TestWorker.perform_async
-  end
+NUMBER_OF_JOBS.times do
+  jobs << TestWorker.perform_async
 end
 
 puts "Queued #{NUMBER_OF_JOBS} jobs"

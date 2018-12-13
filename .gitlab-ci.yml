@@ -41,11 +41,11 @@ integration_reliable:
     JOB_FETCHER: reliable
 
 
-integration_base:
+integration_basic:
   extends: .integration
   allow_failure: yes
   variables:
-    JOB_FETCHER: base
+    JOB_FETCHER: basic
 
 
 # rubocop:
