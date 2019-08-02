@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'sidekiq/job_retry'
+
 module Sidekiq
   class BaseReliableFetch
     DEFAULT_CLEANUP_INTERVAL = 60 * 60  # 1 hour
@@ -137,12 +139,56 @@ module Sidekiq
       Sidekiq.redis do |conn|
         count = 0
 
-        while conn.rpoplpush(working_queue, original_queue) do
-          count += 1
+        while job = conn.rpop(working_queue)
+          msg = begin
+                  Sidekiq.load_json(job)
+                rescue => e
+                  Sidekiq.logger.info("Skipped job: #{job} as we couldn't parse it")
+                  next
+                end
+
+          msg['retry_count'] = msg['retry_count'].to_i + 1
+
+          if retries_exhausted?(msg)
+            send_to_morgue(msg)
+          else
+            job = Sidekiq.dump_json(msg)
+
+            conn.lpush(original_queue, job)
+
+            count += 1
+          end
         end
 
         Sidekiq.logger.info("Requeued #{count} dead jobs to #{original_queue}")
       end
+    end
+
+    def retries_exhausted?(msg)
+      max_retries_default = Sidekiq.options.fetch(:max_retries, Sidekiq::JobRetry::DEFAULT_MAX_RETRY_ATTEMPTS)
+
+      max_retry_attempts = retry_attempts_from(msg['retry'], max_retries_default)
+
+      msg['retry_count'] >= max_retry_attempts
+    end
+
+    def retry_attempts_from(msg_retry, default)
+      if msg_retry.is_a?(Integer)
+        msg_retry
+      else
+        default
+      end
+    end
+
+    def send_to_morgue(msg)
+      Sidekiq.logger.warn(
+        class: msg['class'],
+        jid: msg['jid'],
+        message: %(Reliable Fetcher: adding dead #{msg['class']} job #{msg['jid']})
+      )
+
+      payload = Sidekiq.dump_json(msg)
+      Sidekiq::DeadSet.new.kill(payload, notify_failure: false)
     end
 
     # Detect "old" jobs and requeue them because the worker they were assigned

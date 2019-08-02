@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-class TestWorker
+class ReliabilityTestWorker
   include Sidekiq::Worker
 
   def perform
