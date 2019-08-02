@@ -8,11 +8,12 @@ describe Sidekiq::BaseReliableFetch do
   before { Sidekiq.redis(&:flushdb) }
 
   describe 'UnitOfWork' do
+    let(:job) { Sidekiq.dump_json({ class: 'Bob', args: [1, 2, 'foo'] }) }
     let(:fetcher) { Sidekiq::ReliableFetch.new(queues: ['foo']) }
 
     describe '#requeue' do
       it 'requeues job' do
-        Sidekiq.redis { |conn| conn.rpush('queue:foo', 'msg') }
+        Sidekiq.redis { |conn| conn.rpush('queue:foo', job) }
 
         uow = fetcher.retrieve_work
 
@@ -25,7 +26,7 @@ describe Sidekiq::BaseReliableFetch do
 
     describe '#acknowledge' do
       it 'acknowledges job' do
-        Sidekiq.redis { |conn| conn.rpush('queue:foo', 'msg') }
+        Sidekiq.redis { |conn| conn.rpush('queue:foo', job) }
 
         uow = fetcher.retrieve_work
 

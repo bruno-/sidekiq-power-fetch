@@ -89,7 +89,7 @@ Sidekiq.redis(&:flushdb)
 jobs = []
 
 NUMBER_OF_JOBS.times do
-  jobs << TestWorker.perform_async
+  jobs << ReliabilityTestWorker.perform_async
 end
 
 puts "Queued #{NUMBER_OF_JOBS} jobs"

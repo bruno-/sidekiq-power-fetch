@@ -3,7 +3,7 @@ image: "ruby:2.5"
 before_script:
   - ruby -v
   - which ruby
-  - gem install bundler --no-ri --no-rdoc
+  - gem install bundler
   - bundle install --jobs $(nproc)  "${FLAGS[@]}"
 
 variables:
@@ -25,7 +25,7 @@ rspec:
 .integration:
   stage: test
   script:
-    - cd test
+    - cd tests/reliability_test
     - bundle exec ruby reliability_test.rb
   services:
     - redis:alpine
@@ -46,6 +46,14 @@ integration_basic:
   allow_failure: yes
   variables:
     JOB_FETCHER: basic
+
+retry_test:
+  stage: test
+  script:
+    - cd tests/retry_test
+    - bundle exec ruby retry_test.rb
+  services:
+    - redis:alpine
 
 
 # rubocop:

@@ -4,33 +4,38 @@ shared_examples 'a Sidekiq fetcher' do
   before { Sidekiq.redis(&:flushdb) }
 
   describe '#retrieve_work' do
+    let(:job) { Sidekiq.dump_json({ class: 'Bob', args: [1, 2, 'foo'] }) }
     let(:fetcher) { described_class.new(queues: ['assigned']) }
 
     it 'retrieves the job and puts it to working queue' do
-      Sidekiq.redis { |conn| conn.rpush('queue:assigned', 'msg') }
+      Sidekiq.redis { |conn| conn.rpush('queue:assigned', job) }
 
       uow = fetcher.retrieve_work
 
       expect(working_queue_size('assigned')).to eq 1
       expect(uow.queue_name).to eq 'assigned'
-      expect(uow.job).to eq 'msg'
+      expect(uow.job).to eq job
       expect(Sidekiq::Queue.new('assigned').size).to eq 0
     end
 
     it 'does not retrieve a job from foreign queue' do
-      Sidekiq.redis { |conn| conn.rpush('queue:not_assigned', 'msg') }
+      Sidekiq.redis { |conn| conn.rpush('queue:not_assigned', job) }
 
       expect(fetcher.retrieve_work).to be_nil
     end
 
-    it 'requeues jobs from dead working queue' do
+    it 'requeues jobs from dead working queue with incremented retry_count' do
       Sidekiq.redis do |conn|
-        conn.rpush(other_process_working_queue_name('assigned'), 'msg')
+        conn.rpush(other_process_working_queue_name('assigned'), job)
       end
+
+      expected_job = Sidekiq.load_json(job)
+      expected_job['retry_count'] = 1
+      expected_job = Sidekiq.dump_json(expected_job)
 
       uow = fetcher.retrieve_work
 
-      expect(uow.job).to eq 'msg'
+      expect(uow.job).to eq expected_job
 
       Sidekiq.redis do |conn|
         expect(conn.llen(other_process_working_queue_name('assigned'))).to eq 0
@@ -41,7 +46,7 @@ shared_examples 'a Sidekiq fetcher' do
       working_queue = live_other_process_working_queue_name('assigned')
 
       Sidekiq.redis do |conn|
-        conn.rpush(working_queue, 'msg')
+        conn.rpush(working_queue, job)
       end
 
       uow = fetcher.retrieve_work
