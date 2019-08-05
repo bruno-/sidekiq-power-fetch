@@ -2,6 +2,7 @@
 
 require_relative '../../lib/sidekiq-reliable-fetch'
 require_relative 'worker'
+require_relative 'no_retry_worker'
 
 TEST_CLEANUP_INTERVAL = 20
 TEST_LEASE_INTERVAL = 5
