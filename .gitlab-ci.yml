@@ -55,6 +55,14 @@ retry_test:
   services:
     - redis:alpine
 
+no_retry_test:
+  stage: test
+  script:
+    - cd tests/retry_test
+    - bundle exec ruby no_retry_test.rb
+  services:
+    - redis:alpine
+
 
 # rubocop:
 #   script:

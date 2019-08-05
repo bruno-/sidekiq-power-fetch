@@ -23,6 +23,9 @@ number it will kill all the workers with `kill -9` and then it will spawn new wo
 ```
 cd retry_test
 bundle exec ruby retry_test.rb
+
+# To verify that workers with "retry: false" are not retried
+bundle exec ruby no_retry_test.rb
 ```
 
 It requires Redis to be running on 6379 port.

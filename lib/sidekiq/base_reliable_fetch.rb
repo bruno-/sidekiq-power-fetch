@@ -165,6 +165,13 @@ module Sidekiq
     end
 
     def retries_exhausted?(msg)
+      # `retry` parameter can be empty when job is running the first time and when
+      # it's not specified in worker class explicitly.
+      # In that case, the default parameter gets injected into the job when
+      # it fails the first time in JobRetry#local.
+      # We should handle the case when `retry` is explicitly set to false
+      return true if msg['retry'] === false
+
       max_retries_default = Sidekiq.options.fetch(:max_retries, Sidekiq::JobRetry::DEFAULT_MAX_RETRY_ATTEMPTS)
 
       max_retry_attempts = retry_attempts_from(msg['retry'], max_retries_default)
