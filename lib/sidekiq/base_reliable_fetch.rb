@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require 'sidekiq/job_retry'
+require_relative 'interrupted_set'
 
 module Sidekiq
   class BaseReliableFetch
@@ -17,6 +17,9 @@ module Sidekiq
 
     # Defines the COUNT parameter that will be passed to Redis SCAN command
     SCAN_COUNT = 1000
+
+    # How much time a job can be interrupted
+    DEFAULT_MAX_RETRIES_AFTER_INTERRUPTION = 3
 
     UnitOfWork = Struct.new(:queue, :job) do
       def acknowledge
@@ -84,18 +87,27 @@ module Sidekiq
     def self.bulk_requeue(inprogress, _options)
       return if inprogress.empty?
 
-      Sidekiq.logger.debug('Re-queueing terminated jobs')
-
       Sidekiq.redis do |conn|
         inprogress.each do |unit_of_work|
           conn.multi do |multi|
-            multi.lpush(unit_of_work.queue, unit_of_work.job)
+            msg = Sidekiq.load_json(unit_of_work.job)
+            msg['interrupted_count'] = msg['interrupted_count'].to_i + 1
+
+            if interruption_exhausted?(msg)
+              send_to_quarantine(msg)
+            else
+              multi.lpush(unit_of_work.queue, Sidekiq.dump_json(msg))
+              Sidekiq.logger.info(
+                message: "Pushed job #{msg['jid']} back to queue #{unit_of_work.queue}",
+                jid: msg['jid'],
+                queue: unit_of_work.queue
+              )
+            end
+
             multi.lrem(working_queue_name(unit_of_work.queue), 1, unit_of_work.job)
           end
         end
       end
-
-      Sidekiq.logger.info("Pushed #{inprogress.size} jobs back to Redis")
     rescue => e
       Sidekiq.logger.warn("Failed to requeue #{inprogress.size} jobs: #{e.message}")
     end
@@ -106,6 +118,34 @@ module Sidekiq
 
     def self.working_queue_name(queue)
       "#{WORKING_QUEUE_PREFIX}:#{queue}:#{hostname}:#{pid}"
+    end
+
+    def self.interruption_exhausted?(msg)
+      msg['interrupted_count'].to_i >= max_retries_after_interruption(msg['class'])
+    end
+
+    def self.max_retries_after_interruption(worker_class)
+      max_retries_after_interruption = nil
+
+      max_retries_after_interruption ||= begin
+        Object.const_get(worker_class).sidekiq_options[:max_retries_after_interruption]
+      rescue NameError
+      end
+
+      max_retries_after_interruption ||= Sidekiq.options[:max_retries_after_interruption]
+      max_retries_after_interruption ||= DEFAULT_MAX_RETRIES_AFTER_INTERRUPTION
+      max_retries_after_interruption
+    end
+
+    def self.send_to_quarantine(msg)
+      Sidekiq.logger.warn(
+        class: msg['class'],
+        jid: msg['jid'],
+        message: %(Reliable Fetcher: adding dead #{msg['class']} job #{msg['jid']} to interrupted queue)
+      )
+
+      job = Sidekiq.dump_json(msg)
+      Sidekiq::InterruptedSet.new.put(job)
     end
 
     attr_reader :cleanup_interval, :last_try_to_take_lease_at, :lease_interval,
@@ -137,8 +177,6 @@ module Sidekiq
       original_queue = working_queue.gsub(/#{WORKING_QUEUE_PREFIX}:|:[^:]*:[0-9]*\z/, '')
 
       Sidekiq.redis do |conn|
-        count = 0
-
         while job = conn.rpop(working_queue)
           msg = begin
                   Sidekiq.load_json(job)
@@ -147,55 +185,23 @@ module Sidekiq
                   next
                 end
 
-          msg['retry_count'] = msg['retry_count'].to_i + 1
+          msg['interrupted_count'] = msg['interrupted_count'].to_i + 1
 
-          if retries_exhausted?(msg)
-            send_to_morgue(msg)
+          if self.class.interruption_exhausted?(msg)
+            self.class.send_to_quarantine(msg)
           else
             job = Sidekiq.dump_json(msg)
 
             conn.lpush(original_queue, job)
 
-            count += 1
+            Sidekiq.logger.info(
+              message: "Requeued dead job #{msg['jid']} to #{original_queue}",
+              jid: msg['jid'],
+              queue: original_queue
+            )
           end
         end
-
-        Sidekiq.logger.info("Requeued #{count} dead jobs to #{original_queue}")
       end
-    end
-
-    def retries_exhausted?(msg)
-      # `retry` parameter can be empty when job is running the first time and when
-      # it's not specified in worker class explicitly.
-      # In that case, the default parameter gets injected into the job when
-      # it fails the first time in JobRetry#local.
-      # We should handle the case when `retry` is explicitly set to false
-      return true if msg['retry'] === false
-
-      max_retries_default = Sidekiq.options.fetch(:max_retries, Sidekiq::JobRetry::DEFAULT_MAX_RETRY_ATTEMPTS)
-
-      max_retry_attempts = retry_attempts_from(msg['retry'], max_retries_default)
-
-      msg['retry_count'] >= max_retry_attempts
-    end
-
-    def retry_attempts_from(msg_retry, default)
-      if msg_retry.is_a?(Integer)
-        msg_retry
-      else
-        default
-      end
-    end
-
-    def send_to_morgue(msg)
-      Sidekiq.logger.warn(
-        class: msg['class'],
-        jid: msg['jid'],
-        message: %(Reliable Fetcher: adding dead #{msg['class']} job #{msg['jid']})
-      )
-
-      payload = Sidekiq.dump_json(msg)
-      Sidekiq::DeadSet.new.kill(payload, notify_failure: false)
     end
 
     # Detect "old" jobs and requeue them because the worker they were assigned

@@ -5,10 +5,11 @@ require 'sidekiq/reliable_fetch'
 require 'sidekiq/semi_reliable_fetch'
 
 describe Sidekiq::BaseReliableFetch do
+  let(:job) { Sidekiq.dump_json(class: 'Bob', args: [1, 2, 'foo']) }
+
   before { Sidekiq.redis(&:flushdb) }
 
   describe 'UnitOfWork' do
-    let(:job) { Sidekiq.dump_json({ class: 'Bob', args: [1, 2, 'foo'] }) }
     let(:fetcher) { Sidekiq::ReliableFetch.new(queues: ['foo']) }
 
     describe '#requeue' do
@@ -47,7 +48,7 @@ describe Sidekiq::BaseReliableFetch do
       expect(queue2.size).to eq 0
 
       uow = described_class::UnitOfWork
-      jobs = [ uow.new('queue:foo', 'bob'), uow.new('queue:foo', 'bar'), uow.new('queue:bar', 'widget') ]
+      jobs = [ uow.new('queue:foo', job), uow.new('queue:foo', job), uow.new('queue:bar', job) ]
       described_class.bulk_requeue(jobs, queues: [])
 
       expect(queue1.size).to eq 2

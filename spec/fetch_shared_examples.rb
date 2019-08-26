@@ -24,13 +24,13 @@ shared_examples 'a Sidekiq fetcher' do
       expect(fetcher.retrieve_work).to be_nil
     end
 
-    it 'requeues jobs from dead working queue with incremented retry_count' do
+    it 'requeues jobs from dead working queue with incremented interrupted_count' do
       Sidekiq.redis do |conn|
         conn.rpush(other_process_working_queue_name('assigned'), job)
       end
 
       expected_job = Sidekiq.load_json(job)
-      expected_job['retry_count'] = 1
+      expected_job['interrupted_count'] = 1
       expected_job = Sidekiq.dump_json(expected_job)
 
       uow = fetcher.retrieve_work
