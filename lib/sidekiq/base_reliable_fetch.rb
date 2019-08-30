@@ -96,12 +96,7 @@ module Sidekiq
             if interruption_exhausted?(msg)
               send_to_quarantine(msg)
             else
-              multi.lpush(unit_of_work.queue, Sidekiq.dump_json(msg))
-              Sidekiq.logger.info(
-                message: "Pushed job #{msg['jid']} back to queue #{unit_of_work.queue}",
-                jid: msg['jid'],
-                queue: unit_of_work.queue
-              )
+              requeue_job(multi, unit_of_work.queue, msg)
             end
 
             multi.lrem(working_queue_name(unit_of_work.queue), 1, unit_of_work.job)
@@ -148,6 +143,16 @@ module Sidekiq
       Sidekiq::InterruptedSet.new.put(job)
     end
 
+    def self.requeue_job(conn, queue, msg)
+      conn.lpush(queue, Sidekiq.dump_json(msg))
+
+      Sidekiq.logger.info(
+        message: "Pushed job #{msg['jid']} back to queue #{queue}",
+        jid: msg['jid'],
+        queue: queue
+      )
+    end
+
     attr_reader :cleanup_interval, :last_try_to_take_lease_at, :lease_interval,
                 :queues, :use_semi_reliable_fetch,
                 :strictly_ordered_queues
@@ -190,15 +195,7 @@ module Sidekiq
           if self.class.interruption_exhausted?(msg)
             self.class.send_to_quarantine(msg)
           else
-            job = Sidekiq.dump_json(msg)
-
-            conn.lpush(original_queue, job)
-
-            Sidekiq.logger.info(
-              message: "Requeued dead job #{msg['jid']} to #{original_queue}",
-              jid: msg['jid'],
-              queue: original_queue
-            )
+            self.class.requeue_job(conn, original_queue, msg)
           end
         end
       end
