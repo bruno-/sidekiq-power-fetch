@@ -4,7 +4,7 @@ shared_examples 'a Sidekiq fetcher' do
   before { Sidekiq.redis(&:flushdb) }
 
   describe '#retrieve_work' do
-    let(:job) { Sidekiq.dump_json({ class: 'Bob', args: [1, 2, 'foo'] }) }
+    let(:job) { Sidekiq.dump_json(class: 'Bob', args: [1, 2, 'foo']) }
     let(:fetcher) { described_class.new(queues: ['assigned']) }
 
     it 'retrieves the job and puts it to working queue' do

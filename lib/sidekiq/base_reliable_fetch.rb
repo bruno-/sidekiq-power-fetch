@@ -90,14 +90,7 @@ module Sidekiq
       Sidekiq.redis do |conn|
         inprogress.each do |unit_of_work|
           conn.multi do |multi|
-            msg = Sidekiq.load_json(unit_of_work.job)
-            msg['interrupted_count'] = msg['interrupted_count'].to_i + 1
-
-            if interruption_exhausted?(msg)
-              send_to_quarantine(msg)
-            else
-              requeue_job(multi, unit_of_work.queue, msg)
-            end
+            preprocess_interrupted_job(unit_of_work.job, unit_of_work.queue, multi)
 
             multi.lrem(working_queue_name(unit_of_work.queue), 1, unit_of_work.job)
           end
@@ -112,28 +105,26 @@ module Sidekiq
 
       Sidekiq.redis do |conn|
         while job = conn.rpop(working_queue)
-          msg = begin
-                  Sidekiq.load_json(job)
-                rescue => e
-                  Sidekiq.logger.info("Skipped job: #{job} as we couldn't parse it")
-                  next
-                end
-
-          msg['interrupted_count'] = msg['interrupted_count'].to_i + 1
-
-          if interruption_exhausted?(msg)
-            send_to_quarantine(msg)
-          else
-            requeue_job(conn, original_queue, msg)
-          end
+          preprocess_interrupted_job(job, original_queue)
         end
+      end
+    end
+
+    def self.preprocess_interrupted_job(job, queue, conn = nil)
+      msg = Sidekiq.load_json(job)
+      msg['interrupted_count'] = msg['interrupted_count'].to_i + 1
+
+      if interruption_exhausted?(msg)
+        send_to_quarantine(msg, conn)
+      else
+        requeue_job(queue, msg, conn)
       end
     end
 
     # Detect "old" jobs and requeue them because the worker they were assigned
     # to probably failed miserably.
     def self.clean_working_queues!
-      Sidekiq.logger.info("Cleaning working queues")
+      Sidekiq.logger.info('Cleaning working queues')
 
       Sidekiq.redis do |conn|
         conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
@@ -160,6 +151,8 @@ module Sidekiq
     end
 
     def self.interruption_exhausted?(msg)
+      return false if max_retries_after_interruption(msg['class']) < 0
+
       msg['interrupted_count'].to_i >= max_retries_after_interruption(msg['class'])
     end
 
@@ -176,7 +169,7 @@ module Sidekiq
       max_retries_after_interruption
     end
 
-    def self.send_to_quarantine(msg)
+    def self.send_to_quarantine(msg, multi_connection = nil)
       Sidekiq.logger.warn(
         class: msg['class'],
         jid: msg['jid'],
@@ -184,17 +177,28 @@ module Sidekiq
       )
 
       job = Sidekiq.dump_json(msg)
-      Sidekiq::InterruptedSet.new.put(job)
+      Sidekiq::InterruptedSet.new.put(job, connection: multi_connection)
     end
 
-    def self.requeue_job(conn, queue, msg)
-      conn.lpush(queue, Sidekiq.dump_json(msg))
+    # If you want this method to be run is a scope of multi connection
+    # you need to pass it
+    def self.requeue_job(queue, msg, conn)
+      with_connection(conn) do |conn|
+        conn.lpush(queue, Sidekiq.dump_json(msg))
+      end
 
       Sidekiq.logger.info(
         message: "Pushed job #{msg['jid']} back to queue #{queue}",
         jid: msg['jid'],
         queue: queue
       )
+    end
+
+    # Yield block with an existing connection or creates another one
+    def self.with_connection(conn, &block)
+      return yield(conn) if conn
+
+      Sidekiq.redis { |conn| yield(conn) }
     end
 
     attr_reader :cleanup_interval, :last_try_to_take_lease_at, :lease_interval,

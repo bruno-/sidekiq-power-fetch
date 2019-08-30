@@ -18,6 +18,9 @@ not been given a chance to finish its work(to report success or fail), for examp
 which is used to limit the amount of such retries. In both cases, Reliable Fetcher increments counter `interrupted_count` and rejects the job from running again when the counter exceeds `max_retries_after_interruption` times (default: 3 times).
 Such a job will be put to `interrupted` queue. This queue mostly behaves as Sidekiq Dead queue so it only stores a limited amount of jobs for a limited term. Same as for Dead queue, all the limits are configurable via `interrupted_max_jobs` (default: 10_000) and `interrupted_timeout_in_seconds` (default: 3 months) Sidekiq option keys.
 
+You can also disable special handling of interrupted jobs by setting `max_retries_after_interruption` into `-1`.
+In this case, interrupted jobs will be run without any limits from Reliable Fetcher and they won't be put into Interrupted queue.
+
 
 ## Installation
 

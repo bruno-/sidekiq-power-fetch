@@ -11,7 +11,7 @@ Sidekiq.redis(&:flushdb)
 
 pids = spawn_workers(NUM_WORKERS)
 
-jid = RetryTestWorker.perform_async('TERM', 60)
+RetryTestWorker.perform_async('TERM', 60)
 
 sleep 300
 
