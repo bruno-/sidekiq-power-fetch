@@ -107,6 +107,50 @@ module Sidekiq
       Sidekiq.logger.warn("Failed to requeue #{inprogress.size} jobs: #{e.message}")
     end
 
+    def self.clean_working_queue!(working_queue)
+      original_queue = working_queue.gsub(/#{WORKING_QUEUE_PREFIX}:|:[^:]*:[0-9]*\z/, '')
+
+      Sidekiq.redis do |conn|
+        while job = conn.rpop(working_queue)
+          msg = begin
+                  Sidekiq.load_json(job)
+                rescue => e
+                  Sidekiq.logger.info("Skipped job: #{job} as we couldn't parse it")
+                  next
+                end
+
+          msg['interrupted_count'] = msg['interrupted_count'].to_i + 1
+
+          if interruption_exhausted?(msg)
+            send_to_quarantine(msg)
+          else
+            requeue_job(conn, original_queue, msg)
+          end
+        end
+      end
+    end
+
+    # Detect "old" jobs and requeue them because the worker they were assigned
+    # to probably failed miserably.
+    def self.clean_working_queues!
+      Sidekiq.logger.info("Cleaning working queues")
+
+      Sidekiq.redis do |conn|
+        conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
+          # Example: "working:name_of_the_job:queue:{hostname}:{PID}"
+          hostname, pid = key.scan(/:([^:]*):([0-9]*)\z/).flatten
+
+          continue if hostname.nil? || pid.nil?
+
+          clean_working_queue!(key) if worker_dead?(hostname, pid, conn)
+        end
+      end
+    end
+
+    def self.worker_dead?(hostname, pid, conn)
+      !conn.get(heartbeat_key(hostname, pid))
+    end
+
     def self.heartbeat_key(hostname, pid)
       "reliable-fetcher-heartbeat-#{hostname}-#{pid}"
     end
@@ -166,7 +210,7 @@ module Sidekiq
     end
 
     def retrieve_work
-      clean_working_queues! if take_lease
+      self.class.clean_working_queues! if take_lease
 
       retrieve_unit_of_work
     end
@@ -177,52 +221,6 @@ module Sidekiq
     end
 
     private
-
-    def clean_working_queue!(working_queue)
-      original_queue = working_queue.gsub(/#{WORKING_QUEUE_PREFIX}:|:[^:]*:[0-9]*\z/, '')
-
-      Sidekiq.redis do |conn|
-        while job = conn.rpop(working_queue)
-          msg = begin
-                  Sidekiq.load_json(job)
-                rescue => e
-                  Sidekiq.logger.info("Skipped job: #{job} as we couldn't parse it")
-                  next
-                end
-
-          msg['interrupted_count'] = msg['interrupted_count'].to_i + 1
-
-          if self.class.interruption_exhausted?(msg)
-            self.class.send_to_quarantine(msg)
-          else
-            self.class.requeue_job(conn, original_queue, msg)
-          end
-        end
-      end
-    end
-
-    # Detect "old" jobs and requeue them because the worker they were assigned
-    # to probably failed miserably.
-    def clean_working_queues!
-      Sidekiq.logger.info("Cleaning working queues")
-
-      Sidekiq.redis do |conn|
-        conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
-          # Example: "working:name_of_the_job:queue:{hostname}:{PID}"
-          hostname, pid = key.scan(/:([^:]*):([0-9]*)\z/).flatten
-
-          continue if hostname.nil? || pid.nil?
-
-          clean_working_queue!(key) if worker_dead?(hostname, pid)
-        end
-      end
-    end
-
-    def worker_dead?(hostname, pid)
-      Sidekiq.redis do |conn|
-        !conn.get(self.class.heartbeat_key(hostname, pid))
-      end
-    end
 
     def take_lease
       return unless allowed_to_take_a_lease?
