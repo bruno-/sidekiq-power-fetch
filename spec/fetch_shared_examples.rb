@@ -4,7 +4,7 @@ shared_examples 'a Sidekiq fetcher' do
   before { Sidekiq.redis(&:flushdb) }
 
   describe '#retrieve_work' do
-    let(:job) { Sidekiq.dump_json({ class: 'Bob', args: [1, 2, 'foo'] }) }
+    let(:job) { Sidekiq.dump_json(class: 'Bob', args: [1, 2, 'foo']) }
     let(:fetcher) { described_class.new(queues: ['assigned']) }
 
     it 'retrieves the job and puts it to working queue' do
@@ -24,13 +24,13 @@ shared_examples 'a Sidekiq fetcher' do
       expect(fetcher.retrieve_work).to be_nil
     end
 
-    it 'requeues jobs from dead working queue with incremented retry_count' do
+    it 'requeues jobs from dead working queue with incremented interrupted_count' do
       Sidekiq.redis do |conn|
         conn.rpush(other_process_working_queue_name('assigned'), job)
       end
 
       expected_job = Sidekiq.load_json(job)
-      expected_job['retry_count'] = 1
+      expected_job['interrupted_count'] = 1
       expected_job = Sidekiq.dump_json(expected_job)
 
       uow = fetcher.retrieve_work
@@ -61,8 +61,7 @@ shared_examples 'a Sidekiq fetcher' do
     it 'does not clean up orphaned jobs more than once per cleanup interval' do
       Sidekiq.redis = Sidekiq::RedisConnection.create(url: REDIS_URL, size: 10)
 
-      expect_any_instance_of(described_class)
-        .to receive(:clean_working_queues!).once
+      expect(described_class).to receive(:clean_working_queues!).once
 
       threads = 10.times.map do
         Thread.new do

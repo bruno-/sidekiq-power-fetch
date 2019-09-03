@@ -18,18 +18,20 @@ You need to have redis server running on default HTTP port `6379`. To use other 
 This tool spawns configured number of Sidekiq workers and when the amount of processed jobs is about half of origin
 number it will kill all the workers with `kill -9` and then it will spawn new workers again until all the jobs are processed. To track the process and counters we use Redis keys/counters.
 
-# How to run retry tests
+# How to run interruption tests
 
 ```
-cd retry_test
-bundle exec ruby retry_test.rb
+cd tests/interruption
 
-# To verify that workers with "retry: false" are not retried
-bundle exec ruby no_retry_test.rb
+# Verify "KILL" signal
+bundle exec ruby test_kill_signal.rb
+
+# Verify "TERM" signal
+bundle exec ruby test_term_signal.rb
 ```
 
 It requires Redis to be running on 6379 port.
 
 ## How it works
 
-It spawns Sidekiq workers then creates a job that will kill itself after a moment. The  reliable fetcher will bring it back. The purpose is to verify that job is run no more then `retry` parameter says even when job was killed.
+It spawns Sidekiq workers then creates a job that will kill itself after a moment. The  reliable fetcher will bring it back. The purpose is to verify that job is run no more then allowed number of times.
