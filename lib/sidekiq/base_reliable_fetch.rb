@@ -41,10 +41,12 @@ module Sidekiq
     end
 
     def self.setup_reliable_fetch!(config)
-      fetch = config.options[:semi_reliable_fetch] ? SemiReliableFetch : ReliableFetch
-      fetch = fetch.new(config.options) if Sidekiq::VERSION >= '6'
+      config.options[:fetch] = if config.options[:semi_reliable_fetch]
+                                 semi_reliable_fetch_strategy(config.options)
+                               else
+                                 reliable_fetch_strategy(config.options)
+                               end
 
-      config.options[:fetch] = fetch
       Sidekiq.logger.info('GitLab reliable fetch activated!')
 
       start_heartbeat_thread
@@ -80,10 +82,6 @@ module Sidekiq
       end
 
       Sidekiq.logger.debug("Heartbeat for hostname: #{hostname} and pid: #{pid}")
-    end
-
-    def bulk_requeue(inprogress, options)
-      self.class.bulk_requeue(inprogress, options)
     end
 
     def self.bulk_requeue(inprogress, _options)
@@ -203,6 +201,26 @@ module Sidekiq
       Sidekiq.redis { |conn| yield(conn) }
     end
 
+    def self.reliable_fetch_strategy(options)
+      if sidekiq_fetch_strategy_api_needs_instance?
+        Sidekiq::ReliableFetch.new(options)
+      else
+        Sidekiq::ReliableFetch
+      end
+    end
+
+    def self.semi_reliable_fetch_strategy(options)
+      if sidekiq_fetch_strategy_api_needs_instance?
+        Sidekiq::SemiReliableFetch.new(options)
+      else
+        Sidekiq::SemiReliableFetch
+      end
+    end
+
+    def self.sidekiq_fetch_strategy_api_needs_instance?
+      Gem::Version.new(Sidekiq::VERSION) >= Gem::Version.new("6.1.0")
+    end
+
     attr_reader :cleanup_interval, :last_try_to_take_lease_at, :lease_interval,
                 :queues, :use_semi_reliable_fetch,
                 :strictly_ordered_queues
@@ -224,6 +242,30 @@ module Sidekiq
     def retrieve_unit_of_work
       raise NotImplementedError,
         "#{self.class} does not implement #{__method__}"
+    end
+
+    def bulk_requeue(inprogress, _options)
+      self.class.bulk_requeue(inprogress, _options)
+    end
+
+    def requeue_job(queue, msg, conn)
+      self.class.requeue_job(queue, msg, conn)
+    end
+
+    def send_to_quarantine(msg, multi_connection = nil)
+      self.class.send_to_quarantine(msg, multi_connection)
+    end
+
+    def preprocess_interrupted_job(job, queue, conn = nil)
+      self.class.preprocess_interrupted_job(job, queue, conn)
+    end
+
+    def clean_working_queue!(working_queue)
+      self.class.clean_working_queue!(working_queue)
+    end
+
+    def clean_working_queues!
+      self.class.clean_working_queues!
     end
 
     private

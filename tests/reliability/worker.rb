@@ -13,14 +13,12 @@ class ReliabilityTestWorker
   end
 
   def get_sidekiq_job_id
-    context_data = Thread.current[:sidekiq_context]&.first
+    jid = Thread.current.fetch(:sidekiq_context, {})[:jid] || Thread.current[:sidekiq_context]&.first
 
-    return unless context_data
+    return unless jid
 
-    index = context_data.index('JID-')
+    prefix_index = jid.index('JID-')
 
-    return unless index
-
-    context_data[index + 4..-1]
+    prefix_index ? jid[prefix_index + 4..-1] : jid
   end
 end
