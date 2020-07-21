@@ -41,12 +41,10 @@ module Sidekiq
     end
 
     def self.setup_reliable_fetch!(config)
-      config.options[:fetch] = if config.options[:semi_reliable_fetch]
-                                 Sidekiq::SemiReliableFetch
-                               else
-                                 Sidekiq::ReliableFetch
-                               end
+      fetch = config.options[:semi_reliable_fetch] ? SemiReliableFetch : ReliableFetch
+      fetch = fetch.new(config.options) if Sidekiq::VERSION >= '6'
 
+      config.options[:fetch] = fetch
       Sidekiq.logger.info('GitLab reliable fetch activated!')
 
       start_heartbeat_thread
@@ -82,6 +80,10 @@ module Sidekiq
       end
 
       Sidekiq.logger.debug("Heartbeat for hostname: #{hostname} and pid: #{pid}")
+    end
+
+    def bulk_requeue(inprogress, options)
+      self.class.bulk_requeue(inprogress, options)
     end
 
     def self.bulk_requeue(inprogress, _options)
