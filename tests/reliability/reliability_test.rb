@@ -57,7 +57,7 @@ end
 def spawn_workers
   pids = []
   NUMBER_OF_WORKERS.times do
-    pids << spawn('sidekiq -r ./config.rb')
+    pids << spawn('sidekiq -q default -q low -q high -r ./config.rb')
   end
 
   pids

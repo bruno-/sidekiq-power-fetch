@@ -80,7 +80,7 @@ describe Sidekiq::BaseReliableFetch do
   end
 
   it 'sets heartbeat' do
-    config = double(:sidekiq_config, options: { queues: [] })
+    config = double(:sidekiq_config, options: { queues: ['first', 'second'] })
 
     heartbeat_thread = described_class.setup_reliable_fetch!(config)
 

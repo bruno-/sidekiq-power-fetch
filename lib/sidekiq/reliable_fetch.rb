@@ -11,14 +11,21 @@ module Sidekiq
     def initialize(options)
       super
 
-      @queues_size = queues.size
-      @queues_iterator = queues.cycle
+      create_queues_iterator
     end
 
     private
 
     def retrieve_unit_of_work
-      @queues_iterator.rewind if strictly_ordered_queues
+      # We need to create a new Enumerator instance for Sidekiq 6.1 because the one created in the
+      # class initializer has been created at the time of sidekiq initialization and would cause FiberError
+      # when a thread would try to iterate (using next). Enumerator is not thread-safe.
+      # We need a mechanism that allows us to have an iterator that is uniq for each thread.
+      # Queue won't help here as it is cross-thread (thread-safe).
+      # We skip that for Sidekiq 6.1 because before fetch API change each thread has it's own instance of the fetch class.
+      create_queues_iterator if self.class.sidekiq_fetch_strategy_api_needs_instance?
+
+      queues_iterator.rewind if strictly_ordered_queues
 
       queues_size.times do
         queue = queues_iterator.next
@@ -35,6 +42,13 @@ module Sidekiq
       sleep(RELIABLE_FETCH_IDLE_TIMEOUT)
 
       nil
+    end
+
+    private
+
+    def create_queues_iterator
+      @queues_size = queues.size
+      @queues_iterator = queues.cycle
     end
   end
 end
