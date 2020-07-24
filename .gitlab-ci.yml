@@ -8,6 +8,7 @@ before_script:
 
 variables:
   REDIS_URL: "redis://redis"
+  SIDEKIQ_VERSION_FOR_TESTS: '~> 5.0'
 
 rspec:
   stage: test
@@ -40,7 +41,6 @@ integration_reliable:
   variables:
     JOB_FETCHER: reliable
 
-
 integration_basic:
   extends: .integration
   allow_failure: yes
@@ -63,6 +63,39 @@ term_interruption:
   services:
     - redis:alpine
 
+.sidekiq_6_1:
+  variables:
+    SIDEKIQ_VERSION_FOR_TESTS: '>= 6.1'
+
+rspec_for_sidekiq_6:
+  extends:
+    - rspec
+    - .sidekiq_6_1
+
+integration_semi_for_sidekiq_6:
+  extends:
+    - integration_semi
+    - .sidekiq_6_1
+
+integration_reliable_for_sidekiq_6:
+  extends:
+    - integration_reliable
+    - .sidekiq_6_1
+
+integration_basic_for_sidekiq_6:
+  extends:
+    - integration_basic
+    - .sidekiq_6_1
+
+kill_interruption_for_sidekiq_6:
+  extends:
+    - kill_interruption
+    - .sidekiq_6_1
+
+term_interruption_for_sidekiq_6:
+  extends:
+    - term_interruption
+    - .sidekiq_6_1
 
 # rubocop:
 #   script:
