@@ -85,12 +85,7 @@ shared_examples 'a Sidekiq fetcher' do
       expect(jobs).to eq ['msg1', 'msg2', 'msg3', 'msg4']
     end
 
-    xit 'does not starve any queue when queues are not strictly ordered' do
-      # Only works for Sidekiq version < 6.1
-      # This is hard to achieve after adding support for Sidekiq 6.1 when the fetcher class
-      # is initialized once in the config and every thread is accessing it. We can't use Enumerator as it is
-      # not thread-safe. We need a mechanism that allows us to have an iterator that is uniq for each thread.
-      # Queue won't help here as it is cross-thread (thread-safe).
+    it 'does not starve any queue when queues are not strictly ordered' do
       fetcher = described_class.new(queues: ['first', 'second'])
 
       Sidekiq.redis do |conn|
