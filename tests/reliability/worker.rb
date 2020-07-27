@@ -23,6 +23,6 @@ class ReliabilityTestWorker
   end
 
   def sidekiq_context
-    @sidekiq_context = Thread.current[:sidekiq_context]
+    @sidekiq_context ||= Thread.current[:sidekiq_context]
   end
 end
