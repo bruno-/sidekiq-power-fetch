@@ -7,7 +7,7 @@ REDIS_FINISHED_LIST = 'reliable-fetcher-finished-jids'
 
 NUMBER_OF_WORKERS = ENV['NUMBER_OF_WORKERS'] || 10
 NUMBER_OF_JOBS = ENV['NUMBER_OF_JOBS'] || 1000
-JOB_FETCHER = (ENV['JOB_FETCHER'] || :reliable).to_sym # :basic, :semi, :reliable
+JOB_FETCHER = (ENV['JOB_FETCHER'] || :semi).to_sym # :basic, :semi, :reliable
 TEST_CLEANUP_INTERVAL = 20
 TEST_LEASE_INTERVAL = 5
 WAIT_CLEANUP = TEST_CLEANUP_INTERVAL +
