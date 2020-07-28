@@ -6,6 +6,8 @@ fetches from Redis.
 
 It's based on https://github.com/TEA-ebook/sidekiq-reliable-fetch.
 
+**IMPORTANT NOTE:** Since version `0.7.0` this gem works only with `sidekiq >= 6.1` (which introduced Fetch API breaking changes). Please use version `~> 0.5` if you use older version of the `sidekiq` .
+
 There are two strategies implemented: [Reliable fetch](http://redis.io/commands/rpoplpush#pattern-reliable-queue) using `rpoplpush` command and
 semi-reliable fetch that uses regular `brpop` and `lpush` to pick the job and put it to working queue. The main benefit of "Reliable" strategy is that `rpoplpush` is atomic, eliminating a race condition in which jobs can be lost.
 However, it comes at a cost because `rpoplpush` can't watch multiple lists at the same time so we need to iterate over the entire queue list which significantly increases pressure on Redis when there are more than a few queues. The "semi-reliable" strategy is much more reliable than the default Sidekiq fetcher, though. Compared to the reliable fetch strategy, it does not increase pressure on Redis significantly.

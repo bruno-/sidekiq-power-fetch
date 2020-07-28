@@ -8,21 +8,11 @@ class ReliabilityTestWorker
     sleep 1
 
     Sidekiq.redis do |redis|
-      redis.lpush(REDIS_FINISHED_LIST, get_sidekiq_job_id)
+      redis.lpush(REDIS_FINISHED_LIST, sidekiq_job_id)
     end
   end
 
-  def get_sidekiq_job_id
-    jid = sidekiq_context.is_a?(Hash) ? sidekiq_context[:jid] : sidekiq_context&.first
-
-    return unless jid
-
-    prefix_index = jid.index('JID-')
-
-    prefix_index ? jid[prefix_index + 4..-1] : jid
-  end
-
-  def sidekiq_context
-    @sidekiq_context ||= Thread.current[:sidekiq_context]
+  def sidekiq_job_id
+    Thread.current[:sidekiq_context][:jid]
   end
 end

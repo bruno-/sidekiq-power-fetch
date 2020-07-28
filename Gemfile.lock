@@ -41,7 +41,7 @@ PLATFORMS
 DEPENDENCIES
   pry
   rspec (~> 3)
-  sidekiq (~> 6.0)
+  sidekiq (~> 6.1)
   simplecov
 
 BUNDLED WITH

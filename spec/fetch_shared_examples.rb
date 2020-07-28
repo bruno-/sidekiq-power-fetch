@@ -60,12 +60,13 @@ shared_examples 'a Sidekiq fetcher' do
 
     it 'does not clean up orphaned jobs more than once per cleanup interval' do
       Sidekiq.redis = Sidekiq::RedisConnection.create(url: REDIS_URL, size: 10)
+      fetch = described_class.new(queues: ['assigned'])
 
-      expect(described_class).to receive(:clean_working_queues!).once
+      expect(fetch).to receive(:clean_working_queues!).once
 
       threads = 10.times.map do
         Thread.new do
-          described_class.new(queues: ['assigned']).retrieve_work
+          fetch.retrieve_work
         end
       end
 
