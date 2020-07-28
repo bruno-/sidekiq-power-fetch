@@ -226,6 +226,8 @@ module Sidekiq
                 :strictly_ordered_queues
 
     def initialize(options)
+      raise ArgumentError, "missing queue list" unless options[:queues]
+
       @cleanup_interval = options.fetch(:cleanup_interval, DEFAULT_CLEANUP_INTERVAL)
       @lease_interval = options.fetch(:lease_interval, DEFAULT_LEASE_INTERVAL)
       @last_try_to_take_lease_at = 0
