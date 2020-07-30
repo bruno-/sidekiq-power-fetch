@@ -8,11 +8,7 @@ class ReliabilityTestWorker
     sleep 1
 
     Sidekiq.redis do |redis|
-      redis.lpush(REDIS_FINISHED_LIST, sidekiq_job_id)
+      redis.lpush(REDIS_FINISHED_LIST, jid)
     end
-  end
-
-  def sidekiq_job_id
-    Thread.current[:sidekiq_context][:jid]
   end
 end
