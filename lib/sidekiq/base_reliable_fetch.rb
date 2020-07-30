@@ -152,7 +152,7 @@ module Sidekiq
       end
     end
 
-    # If you want this method to be run is a scope of multi connection
+    # If you want this method to be run in a scope of multi connection
     # you need to pass it
     def requeue_job(queue, msg, conn)
       with_connection(conn) do |conn|
