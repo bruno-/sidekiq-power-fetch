@@ -6,23 +6,21 @@ module Sidekiq
     # we inject a regular sleep into the loop.
     RELIABLE_FETCH_IDLE_TIMEOUT = 5 # seconds
 
-    attr_reader :queues_iterator, :queues_size
+    attr_reader :queues_size
 
     def initialize(options)
       super
 
+      @queues = queues.uniq if strictly_ordered_queues
       @queues_size = queues.size
-      @queues_iterator = queues.cycle
     end
 
     private
 
     def retrieve_unit_of_work
-      @queues_iterator.rewind if strictly_ordered_queues
+      queues_list = strictly_ordered_queues ? queues : queues.shuffle
 
-      queues_size.times do
-        queue = queues_iterator.next
-
+      queues_list.each do |queue|
         work = Sidekiq.redis do |conn|
           conn.rpoplpush(queue, self.class.working_queue_name(queue))
         end

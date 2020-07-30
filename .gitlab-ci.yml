@@ -40,7 +40,6 @@ integration_reliable:
   variables:
     JOB_FETCHER: reliable
 
-
 integration_basic:
   extends: .integration
   allow_failure: yes
@@ -62,7 +61,6 @@ term_interruption:
     - bundle exec ruby test_term_signal.rb
   services:
     - redis:alpine
-
 
 # rubocop:
 #   script:

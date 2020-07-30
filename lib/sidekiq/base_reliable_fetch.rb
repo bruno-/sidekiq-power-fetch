@@ -41,10 +41,14 @@ module Sidekiq
     end
 
     def self.setup_reliable_fetch!(config)
-      fetch = config.options[:semi_reliable_fetch] ? SemiReliableFetch : ReliableFetch
-      fetch = fetch.new(config.options) if Sidekiq::VERSION >= '6'
+      fetch_strategy = if config.options[:semi_reliable_fetch]
+                         Sidekiq::SemiReliableFetch
+                       else
+                         Sidekiq::ReliableFetch
+                       end
 
-      config.options[:fetch] = fetch
+      config.options[:fetch] = fetch_strategy.new(config.options)
+
       Sidekiq.logger.info('GitLab reliable fetch activated!')
 
       start_heartbeat_thread
@@ -82,64 +86,6 @@ module Sidekiq
       Sidekiq.logger.debug("Heartbeat for hostname: #{hostname} and pid: #{pid}")
     end
 
-    def bulk_requeue(inprogress, options)
-      self.class.bulk_requeue(inprogress, options)
-    end
-
-    def self.bulk_requeue(inprogress, _options)
-      return if inprogress.empty?
-
-      Sidekiq.redis do |conn|
-        inprogress.each do |unit_of_work|
-          conn.multi do |multi|
-            preprocess_interrupted_job(unit_of_work.job, unit_of_work.queue, multi)
-
-            multi.lrem(working_queue_name(unit_of_work.queue), 1, unit_of_work.job)
-          end
-        end
-      end
-    rescue => e
-      Sidekiq.logger.warn("Failed to requeue #{inprogress.size} jobs: #{e.message}")
-    end
-
-    def self.clean_working_queue!(working_queue)
-      original_queue = working_queue.gsub(/#{WORKING_QUEUE_PREFIX}:|:[^:]*:[0-9]*\z/, '')
-
-      Sidekiq.redis do |conn|
-        while job = conn.rpop(working_queue)
-          preprocess_interrupted_job(job, original_queue)
-        end
-      end
-    end
-
-    def self.preprocess_interrupted_job(job, queue, conn = nil)
-      msg = Sidekiq.load_json(job)
-      msg['interrupted_count'] = msg['interrupted_count'].to_i + 1
-
-      if interruption_exhausted?(msg)
-        send_to_quarantine(msg, conn)
-      else
-        requeue_job(queue, msg, conn)
-      end
-    end
-
-    # Detect "old" jobs and requeue them because the worker they were assigned
-    # to probably failed miserably.
-    def self.clean_working_queues!
-      Sidekiq.logger.info('Cleaning working queues')
-
-      Sidekiq.redis do |conn|
-        conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
-          # Example: "working:name_of_the_job:queue:{hostname}:{PID}"
-          hostname, pid = key.scan(/:([^:]*):([0-9]*)\z/).flatten
-
-          continue if hostname.nil? || pid.nil?
-
-          clean_working_queue!(key) if worker_dead?(hostname, pid, conn)
-        end
-      end
-    end
-
     def self.worker_dead?(hostname, pid, conn)
       !conn.get(heartbeat_key(hostname, pid))
     end
@@ -152,13 +98,108 @@ module Sidekiq
       "#{WORKING_QUEUE_PREFIX}:#{queue}:#{hostname}:#{pid}"
     end
 
-    def self.interruption_exhausted?(msg)
+    attr_reader :cleanup_interval, :last_try_to_take_lease_at, :lease_interval,
+                :queues, :use_semi_reliable_fetch,
+                :strictly_ordered_queues
+
+    def initialize(options)
+      raise ArgumentError, 'missing queue list' unless options[:queues]
+
+      @cleanup_interval = options.fetch(:cleanup_interval, DEFAULT_CLEANUP_INTERVAL)
+      @lease_interval = options.fetch(:lease_interval, DEFAULT_LEASE_INTERVAL)
+      @last_try_to_take_lease_at = 0
+      @strictly_ordered_queues = !!options[:strict]
+      @queues = options[:queues].map { |q| "queue:#{q}" }
+    end
+
+    def retrieve_work
+      clean_working_queues! if take_lease
+
+      retrieve_unit_of_work
+    end
+
+    def retrieve_unit_of_work
+      raise NotImplementedError,
+            "#{self.class} does not implement #{__method__}"
+    end
+
+    def bulk_requeue(inprogress, _options)
+      return if inprogress.empty?
+
+      Sidekiq.redis do |conn|
+        inprogress.each do |unit_of_work|
+          conn.multi do |multi|
+            preprocess_interrupted_job(unit_of_work.job, unit_of_work.queue, multi)
+
+            multi.lrem(self.class.working_queue_name(unit_of_work.queue), 1, unit_of_work.job)
+          end
+        end
+      end
+    rescue => e
+      Sidekiq.logger.warn("Failed to requeue #{inprogress.size} jobs: #{e.message}")
+    end
+
+    private
+
+    def preprocess_interrupted_job(job, queue, conn = nil)
+      msg = Sidekiq.load_json(job)
+      msg['interrupted_count'] = msg['interrupted_count'].to_i + 1
+
+      if interruption_exhausted?(msg)
+        send_to_quarantine(msg, conn)
+      else
+        requeue_job(queue, msg, conn)
+      end
+    end
+
+    # If you want this method to be run in a scope of multi connection
+    # you need to pass it
+    def requeue_job(queue, msg, conn)
+      with_connection(conn) do |conn|
+        conn.lpush(queue, Sidekiq.dump_json(msg))
+      end
+
+      Sidekiq.logger.info(
+        message: "Pushed job #{msg['jid']} back to queue #{queue}",
+        jid: msg['jid'],
+        queue: queue
+      )
+    end
+
+    # Detect "old" jobs and requeue them because the worker they were assigned
+    # to probably failed miserably.
+    def clean_working_queues!
+      Sidekiq.logger.info('Cleaning working queues')
+
+      Sidekiq.redis do |conn|
+        conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
+          # Example: "working:name_of_the_job:queue:{hostname}:{PID}"
+          hostname, pid = key.scan(/:([^:]*):([0-9]*)\z/).flatten
+
+          continue if hostname.nil? || pid.nil?
+
+          clean_working_queue!(key) if self.class.worker_dead?(hostname, pid, conn)
+        end
+      end
+    end
+
+    def clean_working_queue!(working_queue)
+      original_queue = working_queue.gsub(/#{WORKING_QUEUE_PREFIX}:|:[^:]*:[0-9]*\z/, '')
+
+      Sidekiq.redis do |conn|
+        while job = conn.rpop(working_queue)
+          preprocess_interrupted_job(job, original_queue)
+        end
+      end
+    end
+
+    def interruption_exhausted?(msg)
       return false if max_retries_after_interruption(msg['class']) < 0
 
       msg['interrupted_count'].to_i >= max_retries_after_interruption(msg['class'])
     end
 
-    def self.max_retries_after_interruption(worker_class)
+    def max_retries_after_interruption(worker_class)
       max_retries_after_interruption = nil
 
       max_retries_after_interruption ||= begin
@@ -171,7 +212,7 @@ module Sidekiq
       max_retries_after_interruption
     end
 
-    def self.send_to_quarantine(msg, multi_connection = nil)
+    def send_to_quarantine(msg, multi_connection = nil)
       Sidekiq.logger.warn(
         class: msg['class'],
         jid: msg['jid'],
@@ -182,51 +223,12 @@ module Sidekiq
       Sidekiq::InterruptedSet.new.put(job, connection: multi_connection)
     end
 
-    # If you want this method to be run is a scope of multi connection
-    # you need to pass it
-    def self.requeue_job(queue, msg, conn)
-      with_connection(conn) do |conn|
-        conn.lpush(queue, Sidekiq.dump_json(msg))
-      end
-
-      Sidekiq.logger.info(
-        message: "Pushed job #{msg['jid']} back to queue #{queue}",
-        jid: msg['jid'],
-        queue: queue
-      )
-    end
-
     # Yield block with an existing connection or creates another one
-    def self.with_connection(conn, &block)
+    def with_connection(conn)
       return yield(conn) if conn
 
-      Sidekiq.redis { |conn| yield(conn) }
+      Sidekiq.redis { |redis_conn| yield(redis_conn) }
     end
-
-    attr_reader :cleanup_interval, :last_try_to_take_lease_at, :lease_interval,
-                :queues, :use_semi_reliable_fetch,
-                :strictly_ordered_queues
-
-    def initialize(options)
-      @cleanup_interval = options.fetch(:cleanup_interval, DEFAULT_CLEANUP_INTERVAL)
-      @lease_interval = options.fetch(:lease_interval, DEFAULT_LEASE_INTERVAL)
-      @last_try_to_take_lease_at = 0
-      @strictly_ordered_queues = !!options[:strict]
-      @queues = options[:queues].map { |q| "queue:#{q}" }
-    end
-
-    def retrieve_work
-      self.class.clean_working_queues! if take_lease
-
-      retrieve_unit_of_work
-    end
-
-    def retrieve_unit_of_work
-      raise NotImplementedError,
-        "#{self.class} does not implement #{__method__}"
-    end
-
-    private
 
     def take_lease
       return unless allowed_to_take_a_lease?

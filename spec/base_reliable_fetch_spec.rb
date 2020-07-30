@@ -39,14 +39,15 @@ describe Sidekiq::BaseReliableFetch do
     end
   end
 
-  describe '.bulk_requeue' do
+  describe '#bulk_requeue' do
+    let(:options) { { queues: %w[foo bar] } }
     let!(:queue1) { Sidekiq::Queue.new('foo') }
     let!(:queue2) { Sidekiq::Queue.new('bar') }
 
     it 'requeues the bulk' do
       uow = described_class::UnitOfWork
       jobs = [ uow.new('queue:foo', job), uow.new('queue:foo', job), uow.new('queue:bar', job) ]
-      described_class.bulk_requeue(jobs, queues: [])
+      described_class.new(options).bulk_requeue(jobs, nil)
 
       expect(queue1.size).to eq 2
       expect(queue2.size).to eq 1
@@ -56,7 +57,7 @@ describe Sidekiq::BaseReliableFetch do
       uow = described_class::UnitOfWork
       interrupted_job = Sidekiq.dump_json(class: 'Bob', args: [1, 2, 'foo'], interrupted_count: 3)
       jobs = [ uow.new('queue:foo', interrupted_job), uow.new('queue:foo', job), uow.new('queue:bar', job) ]
-      described_class.bulk_requeue(jobs, queues: [])
+      described_class.new(options).bulk_requeue(jobs, nil)
 
       expect(queue1.size).to eq 1
       expect(queue2.size).to eq 1
@@ -69,7 +70,7 @@ describe Sidekiq::BaseReliableFetch do
       uow = described_class::UnitOfWork
       interrupted_job = Sidekiq.dump_json(class: 'Bob', args: [1, 2, 'foo'], interrupted_count: 3)
       jobs = [ uow.new('queue:foo', interrupted_job), uow.new('queue:foo', job), uow.new('queue:bar', job) ]
-      described_class.bulk_requeue(jobs, queues: [])
+      described_class.new(options).bulk_requeue(jobs, nil)
 
       expect(queue1.size).to eq 2
       expect(queue2.size).to eq 1
@@ -80,7 +81,7 @@ describe Sidekiq::BaseReliableFetch do
   end
 
   it 'sets heartbeat' do
-    config = double(:sidekiq_config, options: { queues: [] })
+    config = double(:sidekiq_config, options: { queues: %w[foo bar] })
 
     heartbeat_thread = described_class.setup_reliable_fetch!(config)
 
