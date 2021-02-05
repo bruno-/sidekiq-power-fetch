@@ -35,10 +35,45 @@ shared_examples 'a Sidekiq fetcher' do
 
       uow = fetcher.retrieve_work
 
+      expect(uow).to_not be_nil
       expect(uow.job).to eq expected_job
 
       Sidekiq.redis do |conn|
         expect(conn.llen(other_process_working_queue_name('assigned'))).to eq 0
+      end
+    end
+
+    it 'requeues jobs from legacy dead working queue with incremented interrupted_count' do
+      Sidekiq.redis do |conn|
+        conn.rpush(legacy_other_process_working_queue_name('assigned'), job)
+      end
+
+      expected_job = Sidekiq.load_json(job)
+      expected_job['interrupted_count'] = 1
+      expected_job = Sidekiq.dump_json(expected_job)
+
+      uow = fetcher.retrieve_work
+
+      expect(uow).to_not be_nil
+      expect(uow.job).to eq expected_job
+
+      Sidekiq.redis do |conn|
+        expect(conn.llen(legacy_other_process_working_queue_name('assigned'))).to eq 0
+      end
+    end
+
+    it 'ignores working queue keys in unknown formats' do
+      # Add a spurious non-numeric char at the end; this simulates any other
+      # incorrect form in general
+      malformed_key = "#{legacy_other_process_working_queue_name('assigned')}X"
+      Sidekiq.redis do |conn|
+        conn.rpush(malformed_key, job)
+      end
+
+      uow = fetcher.retrieve_work
+
+      Sidekiq.redis do |conn|
+        expect(conn.llen(malformed_key)).to eq 1
       end
     end
 
@@ -106,17 +141,22 @@ def working_queue_size(queue_name)
   end
 end
 
-def other_process_working_queue_name(queue)
+def legacy_other_process_working_queue_name(queue)
   "#{Sidekiq::BaseReliableFetch::WORKING_QUEUE_PREFIX}:queue:#{queue}:#{Socket.gethostname}:#{::Process.pid + 1}"
+end
+
+def other_process_working_queue_name(queue)
+  "#{Sidekiq::BaseReliableFetch::WORKING_QUEUE_PREFIX}:queue:#{queue}:#{Socket.gethostname}:#{::Process.pid + 1}:#{::SecureRandom.hex(6)}"
 end
 
 def live_other_process_working_queue_name(queue)
   pid = ::Process.pid + 1
   hostname = Socket.gethostname
+  nonce = SecureRandom.hex(6)
 
   Sidekiq.redis do |conn|
-    conn.set(Sidekiq::BaseReliableFetch.heartbeat_key(hostname, pid), 1)
+    conn.set(Sidekiq::BaseReliableFetch.heartbeat_key("#{hostname}-#{pid}-#{nonce}"), 1)
   end
 
-  "#{Sidekiq::BaseReliableFetch::WORKING_QUEUE_PREFIX}:queue:#{queue}:#{hostname}:#{pid}"
+  "#{Sidekiq::BaseReliableFetch::WORKING_QUEUE_PREFIX}:queue:#{queue}:#{hostname}:#{pid}:#{nonce}"
 end
