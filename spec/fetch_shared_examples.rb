@@ -42,6 +42,22 @@ shared_examples 'a Sidekiq fetcher' do
       end
     end
 
+    it 'ignores working queue keys in unknown formats' do
+      # Add a spurious non-numeric char segment at the end; this simulates any other
+      # incorrect form in general
+      malformed_key = "#{other_process_working_queue_name('assigned')}:X"
+      Sidekiq.redis do |conn|
+        conn.rpush(malformed_key, job)
+      end
+
+      uow = fetcher.retrieve_work
+
+      Sidekiq.redis do |conn|
+        expect(conn.llen(malformed_key)).to eq 1
+      end
+    end
+
+
     it 'does not requeue jobs from live working queue' do
       working_queue = live_other_process_working_queue_name('assigned')
 
