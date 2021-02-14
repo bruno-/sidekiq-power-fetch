@@ -132,6 +132,24 @@ shared_examples 'a Sidekiq fetcher' do
 
       expect(jobs).to include 'this_job_should_not_stuck'
     end
+
+    context 'with short cleanup interval' do
+      let(:short_interval) { 1 }
+      let(:fetcher) { described_class.new(queues: queues, lease_interval: short_interval, cleanup_interval: short_interval) }
+
+      it 'requeues when there is no heartbeat' do
+        Sidekiq.redis { |conn| conn.rpush('queue:assigned', job) }
+        # Use of retrieve_work twice with a sleep ensures we have exercised the
+        # `identity` method to create the working queue key name and that it
+        # matches the patterns used in the cleanup
+        uow = fetcher.retrieve_work
+        sleep(short_interval + 1)
+        uow = fetcher.retrieve_work
+
+        # Will only receive a UnitOfWork if the job was detected as failed and requeued
+        expect(uow).to_not be_nil
+      end
+    end
   end
 end
 

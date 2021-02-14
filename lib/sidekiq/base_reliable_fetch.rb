@@ -40,9 +40,6 @@ module Sidekiq
       end
     end
 
-    # Utils are needed as class methods, not instance methods
-    extend Sidekiq::Util
-
     def self.setup_reliable_fetch!(config)
       fetch_strategy = if config.options[:semi_reliable_fetch]
                          Sidekiq::SemiReliableFetch
@@ -71,6 +68,18 @@ module Sidekiq
           end
         end
       end
+    end
+
+    def self.hostname
+      Socket.gethostname
+    end
+
+    def self.process_nonce
+      @@process_nonce ||= SecureRandom.hex(6)
+    end
+
+    def self.identity
+      @@identity ||= "#{hostname}:#{$$}:#{process_nonce}"
     end
 
     def self.heartbeat
@@ -162,11 +171,10 @@ module Sidekiq
     end
 
     def valid_identity_format(identity)
-      # New format depends on the implementation of Sidekiq::Util::identity
-      # and is "{hostname}:{pid}:{randomhex}
+      # New format is "{hostname}:{pid}:{randomhex}
       # Old format is "{hostname}:{pid}"
 
-      # Test the newer first, only checking the older if it's not the first
+      # Test the newer format first, only checking the older if necessary
       identity.match(/[^:]*:[0-9]*:[0-9a-f]*\z/) || identity.match(/([^:]*):([0-9]*)\z/)
     end
 
