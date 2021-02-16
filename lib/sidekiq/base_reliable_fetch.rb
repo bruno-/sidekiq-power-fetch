@@ -170,7 +170,7 @@ module Sidekiq
       )
     end
 
-    def valid_identity_format(identity)
+    def valid_identity_format?(identity)
       # New format is "{hostname}:{pid}:{randomhex}
       # Old format is "{hostname}:{pid}"
 
@@ -187,7 +187,7 @@ module Sidekiq
         conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
           original_queue, identity = key.scan(/#{WORKING_QUEUE_PREFIX}:(queue:[^:]*):(.*)\z/).flatten
 
-          next unless valid_identity_format(identity)
+          next unless valid_identity_format?(identity)
 
           clean_working_queue!(original_queue, key) if self.class.worker_dead?(identity, conn)
         end
