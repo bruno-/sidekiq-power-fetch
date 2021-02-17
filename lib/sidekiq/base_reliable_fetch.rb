@@ -176,7 +176,7 @@ module Sidekiq
           # Example: "working:name_of_the_job:queue:{hostname}:{PID}"
           hostname, pid = key.scan(/:([^:]*):([0-9]*)\z/).flatten
 
-          continue if hostname.nil? || pid.nil?
+          next if hostname.nil? || pid.nil?
 
           clean_working_queue!(key) if self.class.worker_dead?(hostname, pid, conn)
         end
