@@ -21,6 +21,10 @@ module Sidekiq
     # How much time a job can be interrupted
     DEFAULT_MAX_RETRIES_AFTER_INTERRUPTION = 3
 
+    # Regexes for matching working queue keys
+    WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*:[0-9a-f]*)\z/.freeze
+    LEGACY_WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*)\z/.freeze
+
     UnitOfWork = Struct.new(:queue, :job) do
       def acknowledge
         Sidekiq.redis { |conn| conn.lrem(Sidekiq::BaseReliableFetch.working_queue_name(queue), 1, job) }
@@ -170,12 +174,17 @@ module Sidekiq
       )
     end
 
-    def valid_identity_format?(identity)
-      # New format is "{hostname}:{pid}:{randomhex}
-      # Old format is "{hostname}:{pid}"
+    def extract_queue_and_identity(key)
+      # New identity format is "{hostname}:{pid}:{randomhex}
+      # Old identity format is "{hostname}:{pid}"
+      # Queue names may also have colons (namespaced).
+      # Expressing this in a single regex is unreadable
 
-      # Test the newer format first, only checking the older if necessary
-      identity.match(/[^:]*:[0-9]*:[0-9a-f]*\z/) || identity.match(/([^:]*):([0-9]*)\z/)
+      # Test the newer expected format first, only checking the older if necessary
+      original_queue, identity = key.scan(WORKING_QUEUE_REGEX).flatten
+      return original_queue, identity unless original_queue.nil? || identity.nil?
+
+      key.scan(LEGACY_WORKING_QUEUE_REGEX).flatten
     end
 
     # Detect "old" jobs and requeue them because the worker they were assigned
@@ -185,9 +194,9 @@ module Sidekiq
 
       Sidekiq.redis do |conn|
         conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
-          original_queue, identity = key.scan(/#{WORKING_QUEUE_PREFIX}:(queue:[^:]*):(.*)\z/).flatten
+          original_queue, identity = extract_queue_and_identity(key)
 
-          next unless valid_identity_format?(identity)
+          next if original_queue.nil? || identity.nil?
 
           clean_working_queue!(original_queue, key) if self.class.worker_dead?(identity, conn)
         end

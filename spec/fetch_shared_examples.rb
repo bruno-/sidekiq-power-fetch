@@ -133,6 +133,86 @@ shared_examples 'a Sidekiq fetcher' do
       expect(jobs).to include 'this_job_should_not_stuck'
     end
 
+    context 'with namespaced queues' do
+      let (:queue) { 'namespace:assigned' }
+      let (:fetcher) { described_class.new(queues: [queue]) }
+
+      it 'requeues jobs from dead namespaced working queue with incremented interrupted_count' do
+        Sidekiq.redis do |conn|
+          conn.rpush(other_process_working_queue_name(queue), job)
+        end
+
+        expected_job = Sidekiq.load_json(job)
+        expected_job['interrupted_count'] = 1
+        expected_job = Sidekiq.dump_json(expected_job)
+
+        uow = fetcher.retrieve_work
+
+        expect(uow).to_not be_nil
+        expect(uow.job).to eq expected_job
+
+        Sidekiq.redis do |conn|
+          expect(conn.llen(other_process_working_queue_name(queue))).to eq 0
+        end
+      end
+
+      it 'does not requeue jobs in a namespaced queue from live working queue' do
+        working_queue = live_other_process_working_queue_name(queue)
+
+        Sidekiq.redis do |conn|
+          conn.rpush(working_queue, job)
+        end
+
+        uow = fetcher.retrieve_work
+
+        expect(uow).to be_nil
+
+        Sidekiq.redis do |conn|
+          expect(conn.llen(working_queue)).to eq 1
+        end
+      end
+    end
+
+    context 'with deeper namespaced queues' do
+      let (:queue) { 'deep:namespace:assigned' }
+      let (:fetcher) { described_class.new(queues: [queue]) }
+
+      it 'requeues jobs from dead namespaced working queue with incremented interrupted_count' do
+        Sidekiq.redis do |conn|
+          conn.rpush(other_process_working_queue_name(queue), job)
+        end
+
+        expected_job = Sidekiq.load_json(job)
+        expected_job['interrupted_count'] = 1
+        expected_job = Sidekiq.dump_json(expected_job)
+
+        uow = fetcher.retrieve_work
+
+        expect(uow).to_not be_nil
+        expect(uow.job).to eq expected_job
+
+        Sidekiq.redis do |conn|
+          expect(conn.llen(other_process_working_queue_name(queue))).to eq 0
+        end
+      end
+
+      it 'does not requeue jobs in a deeper namespaced queue from live working queue' do
+        working_queue = live_other_process_working_queue_name(queue)
+
+        Sidekiq.redis do |conn|
+          conn.rpush(working_queue, job)
+        end
+
+        uow = fetcher.retrieve_work
+
+        expect(uow).to be_nil
+
+        Sidekiq.redis do |conn|
+          expect(conn.llen(working_queue)).to eq 1
+        end
+      end
+    end
+
     context 'with short cleanup interval' do
       let(:short_interval) { 1 }
       let(:fetcher) { described_class.new(queues: queues, lease_interval: short_interval, cleanup_interval: short_interval) }
