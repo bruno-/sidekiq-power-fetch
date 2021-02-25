@@ -7,90 +7,10 @@ shared_examples 'a Sidekiq fetcher' do
     let(:job) { Sidekiq.dump_json(class: 'Bob', args: [1, 2, 'foo']) }
     let(:fetcher) { described_class.new(queues: queues) }
 
-    it 'retrieves the job and puts it to working queue' do
-      Sidekiq.redis { |conn| conn.rpush('queue:assigned', job) }
-
-      uow = fetcher.retrieve_work
-
-      expect(working_queue_size('assigned')).to eq 1
-      expect(uow.queue_name).to eq 'assigned'
-      expect(uow.job).to eq job
-      expect(Sidekiq::Queue.new('assigned').size).to eq 0
-    end
-
     it 'does not retrieve a job from foreign queue' do
       Sidekiq.redis { |conn| conn.rpush('queue:not_assigned', job) }
 
       expect(fetcher.retrieve_work).to be_nil
-    end
-
-    it 'requeues jobs from dead working queue with incremented interrupted_count' do
-      Sidekiq.redis do |conn|
-        conn.rpush(other_process_working_queue_name('assigned'), job)
-      end
-
-      expected_job = Sidekiq.load_json(job)
-      expected_job['interrupted_count'] = 1
-      expected_job = Sidekiq.dump_json(expected_job)
-
-      uow = fetcher.retrieve_work
-
-      expect(uow).to_not be_nil
-      expect(uow.job).to eq expected_job
-
-      Sidekiq.redis do |conn|
-        expect(conn.llen(other_process_working_queue_name('assigned'))).to eq 0
-      end
-    end
-
-    it 'requeues jobs from legacy dead working queue with incremented interrupted_count' do
-      Sidekiq.redis do |conn|
-        conn.rpush(legacy_other_process_working_queue_name('assigned'), job)
-      end
-
-      expected_job = Sidekiq.load_json(job)
-      expected_job['interrupted_count'] = 1
-      expected_job = Sidekiq.dump_json(expected_job)
-
-      uow = fetcher.retrieve_work
-
-      expect(uow).to_not be_nil
-      expect(uow.job).to eq expected_job
-
-      Sidekiq.redis do |conn|
-        expect(conn.llen(legacy_other_process_working_queue_name('assigned'))).to eq 0
-      end
-    end
-
-    it 'ignores working queue keys in unknown formats' do
-      # Add a spurious non-numeric char segment at the end; this simulates any other
-      # incorrect form in general
-      malformed_key = "#{other_process_working_queue_name('assigned')}:X"
-      Sidekiq.redis do |conn|
-        conn.rpush(malformed_key, job)
-      end
-
-      uow = fetcher.retrieve_work
-
-      Sidekiq.redis do |conn|
-        expect(conn.llen(malformed_key)).to eq 1
-      end
-    end
-
-    it 'does not requeue jobs from live working queue' do
-      working_queue = live_other_process_working_queue_name('assigned')
-
-      Sidekiq.redis do |conn|
-        conn.rpush(working_queue, job)
-      end
-
-      uow = fetcher.retrieve_work
-
-      expect(uow).to be_nil
-
-      Sidekiq.redis do |conn|
-        expect(conn.llen(working_queue)).to eq 1
-      end
     end
 
     it 'does not clean up orphaned jobs more than once per cleanup interval' do
@@ -133,11 +53,55 @@ shared_examples 'a Sidekiq fetcher' do
       expect(jobs).to include 'this_job_should_not_stuck'
     end
 
-    context 'with namespaced queues' do
-      let (:queue) { 'namespace:assigned' }
+    shared_examples "basic queue handling" do |queue|
       let (:fetcher) { described_class.new(queues: [queue]) }
 
-      it 'requeues jobs from dead namespaced working queue with incremented interrupted_count' do
+      it 'retrieves the job and puts it to working queue' do
+        Sidekiq.redis { |conn| conn.rpush("queue:#{queue}", job) }
+
+        uow = fetcher.retrieve_work
+
+        expect(working_queue_size(queue)).to eq 1
+        expect(uow.queue_name).to eq queue
+        expect(uow.job).to eq job
+        expect(Sidekiq::Queue.new(queue).size).to eq 0
+      end
+
+      it 'requeues jobs from legacy dead working queue with incremented interrupted_count' do
+        Sidekiq.redis do |conn|
+          conn.rpush(legacy_other_process_working_queue_name(queue), job)
+        end
+
+        expected_job = Sidekiq.load_json(job)
+        expected_job['interrupted_count'] = 1
+        expected_job = Sidekiq.dump_json(expected_job)
+
+        uow = fetcher.retrieve_work
+
+        expect(uow).to_not be_nil
+        expect(uow.job).to eq expected_job
+
+        Sidekiq.redis do |conn|
+          expect(conn.llen(legacy_other_process_working_queue_name(queue))).to eq 0
+        end
+      end
+
+      it 'ignores working queue keys in unknown formats' do
+        # Add a spurious non-numeric char segment at the end; this simulates any other
+        # incorrect form in general
+        malformed_key = "#{other_process_working_queue_name(queue)}:X"
+        Sidekiq.redis do |conn|
+          conn.rpush(malformed_key, job)
+        end
+
+        uow = fetcher.retrieve_work
+
+        Sidekiq.redis do |conn|
+          expect(conn.llen(malformed_key)).to eq 1
+        end
+      end
+
+      it 'requeues jobs from dead working queue with incremented interrupted_count' do
         Sidekiq.redis do |conn|
           conn.rpush(other_process_working_queue_name(queue), job)
         end
@@ -156,7 +120,7 @@ shared_examples 'a Sidekiq fetcher' do
         end
       end
 
-      it 'does not requeue jobs in a namespaced queue from live working queue' do
+      it 'does not requeue jobs from live working queue' do
         working_queue = live_other_process_working_queue_name(queue)
 
         Sidekiq.redis do |conn|
@@ -173,43 +137,9 @@ shared_examples 'a Sidekiq fetcher' do
       end
     end
 
-    context 'with deeper namespaced queues' do
-      let (:queue) { 'deep:namespace:assigned' }
-      let (:fetcher) { described_class.new(queues: [queue]) }
-
-      it 'requeues jobs from dead namespaced working queue with incremented interrupted_count' do
-        Sidekiq.redis do |conn|
-          conn.rpush(other_process_working_queue_name(queue), job)
-        end
-
-        expected_job = Sidekiq.load_json(job)
-        expected_job['interrupted_count'] = 1
-        expected_job = Sidekiq.dump_json(expected_job)
-
-        uow = fetcher.retrieve_work
-
-        expect(uow).to_not be_nil
-        expect(uow.job).to eq expected_job
-
-        Sidekiq.redis do |conn|
-          expect(conn.llen(other_process_working_queue_name(queue))).to eq 0
-        end
-      end
-
-      it 'does not requeue jobs in a deeper namespaced queue from live working queue' do
-        working_queue = live_other_process_working_queue_name(queue)
-
-        Sidekiq.redis do |conn|
-          conn.rpush(working_queue, job)
-        end
-
-        uow = fetcher.retrieve_work
-
-        expect(uow).to be_nil
-
-        Sidekiq.redis do |conn|
-          expect(conn.llen(working_queue)).to eq 1
-        end
+    context 'with various queues' do
+      %w[assigned namespace:assigned namespace:deeper:assigned].each do |queue|
+        it_behaves_like "basic queue handling", queue
       end
     end
 
