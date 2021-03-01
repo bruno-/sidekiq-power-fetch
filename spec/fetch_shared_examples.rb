@@ -7,12 +7,6 @@ shared_examples 'a Sidekiq fetcher' do
     let(:job) { Sidekiq.dump_json(class: 'Bob', args: [1, 2, 'foo']) }
     let(:fetcher) { described_class.new(queues: queues) }
 
-    it 'does not retrieve a job from foreign queue' do
-      Sidekiq.redis { |conn| conn.rpush('queue:not_assigned', job) }
-
-      expect(fetcher.retrieve_work).to be_nil
-    end
-
     it 'does not clean up orphaned jobs more than once per cleanup interval' do
       Sidekiq.redis = Sidekiq::RedisConnection.create(url: REDIS_URL, size: 10)
 
@@ -65,6 +59,17 @@ shared_examples 'a Sidekiq fetcher' do
         expect(uow.queue_name).to eq queue
         expect(uow.job).to eq job
         expect(Sidekiq::Queue.new(queue).size).to eq 0
+      end
+
+      it 'does not retrieve a job from foreign queue' do
+        Sidekiq.redis { |conn| conn.rpush("'queue:#{queue}:not", job) }
+        expect(fetcher.retrieve_work).to be_nil
+
+        Sidekiq.redis { |conn| conn.rpush("'queue:not_#{queue}", job) }
+        expect(fetcher.retrieve_work).to be_nil
+
+        Sidekiq.redis { |conn| conn.rpush("'queue:random_name", job) }
+        expect(fetcher.retrieve_work).to be_nil
       end
 
       it 'requeues jobs from legacy dead working queue with incremented interrupted_count' do
