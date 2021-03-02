@@ -21,6 +21,10 @@ module Sidekiq
     # How much time a job can be interrupted
     DEFAULT_MAX_RETRIES_AFTER_INTERRUPTION = 3
 
+    # Regexes for matching working queue keys
+    WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*:[0-9a-f]*)\z/.freeze
+    LEGACY_WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*)\z/.freeze
+
     UnitOfWork = Struct.new(:queue, :job) do
       def acknowledge
         Sidekiq.redis { |conn| conn.lrem(Sidekiq::BaseReliableFetch.working_queue_name(queue), 1, job) }
@@ -70,32 +74,36 @@ module Sidekiq
       end
     end
 
-    def self.pid
-      @pid ||= ::Process.pid
+    def self.hostname
+      Socket.gethostname
     end
 
-    def self.hostname
-      @hostname ||= Socket.gethostname
+    def self.process_nonce
+      @@process_nonce ||= SecureRandom.hex(6)
+    end
+
+    def self.identity
+      @@identity ||= "#{hostname}:#{$$}:#{process_nonce}"
     end
 
     def self.heartbeat
       Sidekiq.redis do |conn|
-        conn.set(heartbeat_key(hostname, pid), 1, ex: HEARTBEAT_LIFESPAN)
+        conn.set(heartbeat_key(identity), 1, ex: HEARTBEAT_LIFESPAN)
       end
 
-      Sidekiq.logger.debug("Heartbeat for hostname: #{hostname} and pid: #{pid}")
+      Sidekiq.logger.debug("Heartbeat for #{identity}")
     end
 
-    def self.worker_dead?(hostname, pid, conn)
-      !conn.get(heartbeat_key(hostname, pid))
+    def self.worker_dead?(identity, conn)
+      !conn.get(heartbeat_key(identity))
     end
 
-    def self.heartbeat_key(hostname, pid)
-      "reliable-fetcher-heartbeat-#{hostname}-#{pid}"
+    def self.heartbeat_key(identity)
+      "reliable-fetcher-heartbeat-#{identity.gsub(':', '-')}"
     end
 
     def self.working_queue_name(queue)
-      "#{WORKING_QUEUE_PREFIX}:#{queue}:#{hostname}:#{pid}"
+      "#{WORKING_QUEUE_PREFIX}:#{queue}:#{identity}"
     end
 
     attr_reader :cleanup_interval, :last_try_to_take_lease_at, :lease_interval,
@@ -166,6 +174,19 @@ module Sidekiq
       )
     end
 
+    def extract_queue_and_identity(key)
+      # New identity format is "{hostname}:{pid}:{randomhex}
+      # Old identity format is "{hostname}:{pid}"
+      # Queue names may also have colons (namespaced).
+      # Expressing this in a single regex is unreadable
+
+      # Test the newer expected format first, only checking the older if necessary
+      original_queue, identity = key.scan(WORKING_QUEUE_REGEX).flatten
+      return original_queue, identity unless original_queue.nil? || identity.nil?
+
+      key.scan(LEGACY_WORKING_QUEUE_REGEX).flatten
+    end
+
     # Detect "old" jobs and requeue them because the worker they were assigned
     # to probably failed miserably.
     def clean_working_queues!
@@ -173,19 +194,16 @@ module Sidekiq
 
       Sidekiq.redis do |conn|
         conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
-          # Example: "working:name_of_the_job:queue:{hostname}:{PID}"
-          hostname, pid = key.scan(/:([^:]*):([0-9]*)\z/).flatten
+          original_queue, identity = extract_queue_and_identity(key)
 
-          next if hostname.nil? || pid.nil?
+          next if original_queue.nil? || identity.nil?
 
-          clean_working_queue!(key) if self.class.worker_dead?(hostname, pid, conn)
+          clean_working_queue!(original_queue, key) if self.class.worker_dead?(identity, conn)
         end
       end
     end
 
-    def clean_working_queue!(working_queue)
-      original_queue = working_queue.gsub(/#{WORKING_QUEUE_PREFIX}:|:[^:]*:[0-9]*\z/, '')
-
+    def clean_working_queue!(original_queue, working_queue)
       Sidekiq.redis do |conn|
         while job = conn.rpop(working_queue)
           preprocess_interrupted_job(job, original_queue)

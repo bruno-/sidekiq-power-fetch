@@ -88,7 +88,7 @@ describe Sidekiq::BaseReliableFetch do
     Sidekiq.redis do |conn|
       sleep 0.2 # Give the time to heartbeat thread to make a loop
 
-      heartbeat_key = described_class.heartbeat_key(Socket.gethostname, ::Process.pid)
+      heartbeat_key = described_class.heartbeat_key(described_class.identity)
       heartbeat = conn.get(heartbeat_key)
 
       expect(heartbeat).not_to be_nil
