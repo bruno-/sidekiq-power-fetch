@@ -34,6 +34,8 @@ GEM
       json (>= 1.8, < 3)
       simplecov-html (~> 0.10.0)
     simplecov-html (0.10.2)
+    stub_env (1.0.4)
+      rspec (>= 2.0, < 4.0)
 
 PLATFORMS
   ruby
@@ -43,6 +45,7 @@ DEPENDENCIES
   rspec (~> 3)
   sidekiq (~> 6.1)
   simplecov
+  stub_env (~> 1.0)
 
 BUNDLED WITH
    1.17.2

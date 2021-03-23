@@ -9,4 +9,5 @@ group :test do
   gem "pry"
   gem "sidekiq", '~> 6.1'
   gem 'simplecov', require: false
+  gem 'stub_env', '~> 1.0'
 end
