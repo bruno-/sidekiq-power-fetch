@@ -5,14 +5,14 @@ module Sidekiq
     # We want the fetch operation to timeout every few seconds so the thread
     # can check if the process is shutting down. This constant is only used
     # for semi-reliable fetch.
-    SEMI_RELIABLE_FETCH_TIMEOUT = 2 # seconds
+    DEFAULT_SEMI_RELIABLE_FETCH_TIMEOUT = 2 # seconds
 
     def initialize(options)
       super
 
       if strictly_ordered_queues
         @queues = @queues.uniq
-        @queues << SEMI_RELIABLE_FETCH_TIMEOUT
+        @queues << semi_reliable_fetch_timeout
       end
     end
 
@@ -36,9 +36,13 @@ module Sidekiq
         @queues
       else
         queues = @queues.shuffle.uniq
-        queues << SEMI_RELIABLE_FETCH_TIMEOUT
+        queues << semi_reliable_fetch_timeout
         queues
       end
+    end
+
+    def semi_reliable_fetch_timeout
+      @semi_reliable_fetch_timeout ||= ENV['SIDEKIQ_SEMI_RELIABLE_FETCH_TIMEOUT']&.to_i || DEFAULT_SEMI_RELIABLE_FETCH_TIMEOUT
     end
   end
 end
