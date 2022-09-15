@@ -1,7 +1,7 @@
 # How to run reliability tests
 
 ```
-cd reliability_test
+cd tests/reliability
 bundle exec ruby reliability_test.rb
 ```
 
