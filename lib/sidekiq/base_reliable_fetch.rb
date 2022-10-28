@@ -116,6 +116,7 @@ module Sidekiq
       raise ArgumentError, 'missing queue list' unless options[:queues]
 
       @config = options
+      @interrupted_set = Sidekiq::InterruptedSet.new
       @cleanup_interval = options.fetch(:cleanup_interval, DEFAULT_CLEANUP_INTERVAL)
       @lease_interval = options.fetch(:lease_interval, DEFAULT_LEASE_INTERVAL)
       @last_try_to_take_lease_at = 0
@@ -241,7 +242,7 @@ module Sidekiq
       )
 
       job = Sidekiq.dump_json(msg)
-      Sidekiq::InterruptedSet.new.put(job, connection: multi_connection)
+      @interrupted_set.put(job, connection: multi_connection)
     end
 
     # Yield block with an existing connection or creates another one

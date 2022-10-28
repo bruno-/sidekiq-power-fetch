@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'sidekiq'
-require 'sidekiq/util'
 require 'sidekiq/cli'
 require_relative 'config'
 

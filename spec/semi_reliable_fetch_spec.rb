@@ -20,7 +20,7 @@ describe Sidekiq::SemiReliableFetch do
 
         it 'brpops with the default timeout timeout' do
           Sidekiq.redis do |connection|
-            expect(connection).to receive(:brpop).with("queue:stuff_to_do", 2).once.and_call_original
+            expect(connection).to receive(:brpop).with("queue:stuff_to_do", { timeout: 2 }).once.and_call_original
 
             fetcher.retrieve_work
           end
@@ -32,7 +32,7 @@ describe Sidekiq::SemiReliableFetch do
 
         it 'brpops with the default timeout timeout' do
           Sidekiq.redis do |connection|
-            expect(connection).to receive(:brpop).with("queue:stuff_to_do", 5).once.and_call_original
+            expect(connection).to receive(:brpop).with("queue:stuff_to_do", { timeout: 5 }).once.and_call_original
 
             fetcher.retrieve_work
           end
