@@ -37,11 +37,15 @@ module Sidekiq
     end
 
     def self.max_jobs
-      Sidekiq.options[:interrupted_max_jobs] || DEFAULT_MAX_CAPACITY
+      options[:interrupted_max_jobs] || DEFAULT_MAX_CAPACITY
     end
 
     def self.timeout
-      Sidekiq.options[:interrupted_timeout_in_seconds] || DEFAULT_MAX_TIMEOUT
+      options[:interrupted_timeout_in_seconds] || DEFAULT_MAX_TIMEOUT
+    end
+
+    def self.options
+      Sidekiq.respond_to?(:[]) ? Sidekiq : Sidekiq.options
     end
   end
 end

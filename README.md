@@ -46,11 +46,11 @@ Sidekiq.configure_server do |config|
 end
 ```
 
-There is an additional parameter `config.options[:semi_reliable_fetch]` you can use to switch between two strategies:
+There is an additional parameter `config[:semi_reliable_fetch]` you can use to switch between two strategies:
 
 ```ruby
 Sidekiq.configure_server do |config|
-  config.options[:semi_reliable_fetch] = true # Default value is false
+  config[:semi_reliable_fetch] = true # Default value is false
 
   Sidekiq::ReliableFetch.setup_reliable_fetch!(config)
 end

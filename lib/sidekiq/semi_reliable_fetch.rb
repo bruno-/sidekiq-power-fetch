@@ -12,7 +12,7 @@ module Sidekiq
 
       if strictly_ordered_queues
         @queues = @queues.uniq
-        @queues << semi_reliable_fetch_timeout
+        @queues << { timeout: semi_reliable_fetch_timeout }
       end
     end
 
@@ -36,7 +36,7 @@ module Sidekiq
         @queues
       else
         queues = @queues.shuffle.uniq
-        queues << semi_reliable_fetch_timeout
+        queues << { timeout: semi_reliable_fetch_timeout }
         queues
       end
     end

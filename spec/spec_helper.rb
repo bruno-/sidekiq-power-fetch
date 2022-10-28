@@ -1,5 +1,4 @@
 require 'sidekiq'
-require 'sidekiq/util'
 require 'sidekiq/api'
 require 'pry'
 require 'simplecov'
