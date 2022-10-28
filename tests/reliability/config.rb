@@ -16,13 +16,13 @@ WAIT_CLEANUP = TEST_CLEANUP_INTERVAL +
 
 Sidekiq.configure_server do |config|
   if %i[semi reliable].include?(JOB_FETCHER)
-    config.options[:semi_reliable_fetch] = (JOB_FETCHER == :semi)
+    config[:semi_reliable_fetch] = (JOB_FETCHER == :semi)
 
     # We need to override these parameters to not wait too long
     # The default values are good for production use only
     # These will be ignored for :basic
-    config.options[:cleanup_interval] = TEST_CLEANUP_INTERVAL
-    config.options[:lease_interval] = TEST_LEASE_INTERVAL
+    config[:cleanup_interval] = TEST_CLEANUP_INTERVAL
+    config[:lease_interval] = TEST_LEASE_INTERVAL
 
     Sidekiq::ReliableFetch.setup_reliable_fetch!(config)
   end

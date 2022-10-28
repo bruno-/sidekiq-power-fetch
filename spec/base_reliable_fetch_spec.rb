@@ -65,7 +65,7 @@ describe Sidekiq::BaseReliableFetch do
     end
 
     it 'does not put jobs into interrupted queue if it is disabled' do
-      Sidekiq.options[:max_retries_after_interruption] = -1
+      options[:max_retries_after_interruption] = -1
 
       uow = described_class::UnitOfWork
       interrupted_job = Sidekiq.dump_json(class: 'Bob', args: [1, 2, 'foo'], interrupted_count: 3)
@@ -75,8 +75,6 @@ describe Sidekiq::BaseReliableFetch do
       expect(queue1.size).to eq 2
       expect(queue2.size).to eq 1
       expect(Sidekiq::InterruptedSet.new.size).to eq 0
-
-      Sidekiq.options[:max_retries_after_interruption] = 3
     end
   end
 

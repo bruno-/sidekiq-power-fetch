@@ -45,13 +45,15 @@ module Sidekiq
     end
 
     def self.setup_reliable_fetch!(config)
-      fetch_strategy = if config.options[:semi_reliable_fetch]
+      config = config.options unless config.respond_to?(:[])
+
+      fetch_strategy = if config[:semi_reliable_fetch]
                          Sidekiq::SemiReliableFetch
                        else
                          Sidekiq::ReliableFetch
                        end
 
-      config.options[:fetch] = fetch_strategy.new(config.options)
+      config[:fetch] = fetch_strategy.new(config)
 
       Sidekiq.logger.info('GitLab reliable fetch activated!')
 
@@ -113,6 +115,7 @@ module Sidekiq
     def initialize(options)
       raise ArgumentError, 'missing queue list' unless options[:queues]
 
+      @config = options
       @cleanup_interval = options.fetch(:cleanup_interval, DEFAULT_CLEANUP_INTERVAL)
       @lease_interval = options.fetch(:lease_interval, DEFAULT_LEASE_INTERVAL)
       @last_try_to_take_lease_at = 0
@@ -225,7 +228,7 @@ module Sidekiq
       rescue NameError
       end
 
-      max_retries_after_interruption ||= Sidekiq.options[:max_retries_after_interruption]
+      max_retries_after_interruption ||= @config[:max_retries_after_interruption]
       max_retries_after_interruption ||= DEFAULT_MAX_RETRIES_AFTER_INTERRUPTION
       max_retries_after_interruption
     end
