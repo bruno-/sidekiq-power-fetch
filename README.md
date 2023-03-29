@@ -1,6 +1,14 @@
 gitlab-sidekiq-fetcher
 ======================
 
+## This gem is no longer updated
+
+As we only use this library inside our Rails application, we have [vendored the gem](https://gitlab.com/gitlab-org/gitlab/-/merge_requests/115681) directly inside that application.
+
+This gem will no longer receive updates pushed to RubyGems.
+
+## Introduction
+
 `gitlab-sidekiq-fetcher` is an extension to Sidekiq that adds support for reliable
 fetches from Redis.
 
