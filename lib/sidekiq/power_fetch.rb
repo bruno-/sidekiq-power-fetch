@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require_relative "interrupted_set"
+require_relative "power_fetch/heartbeat"
+require_relative "power_fetch/unit_of_work"
 
 module Sidekiq
   class PowerFetch
@@ -26,31 +28,6 @@ module Sidekiq
     # we inject a regular sleep into the loop.
     RELIABLE_FETCH_IDLE_TIMEOUT = 5 # seconds
 
-    class UnitOfWork
-      def initialize(queue, job)
-        @queue = queue
-        @job = job
-      end
-
-      def acknowledge
-        Sidekiq.redis do |conn|
-          conn.lrem(PowerFetch.working_queue_name(@queue), 1, @job)
-        end
-      end
-
-      def queue_name
-        @queue.sub(/.*queue:/, '')
-      end
-
-      def requeue
-        Sidekiq.redis do |conn|
-          conn.multi do |multi|
-            multi.lpush(@queue, @job)
-            multi.lrem(PowerFetch.working_queue_name(@queue), 1, @job)
-          end
-        end
-      end
-    end
 
     def self.setup!(config)
       config = config.options unless config.respond_to?(:[])
