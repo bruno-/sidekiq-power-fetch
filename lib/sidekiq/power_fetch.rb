@@ -5,9 +5,6 @@ require_relative "interrupted_set"
 module Sidekiq
   class PowerFetch
     DEFAULT_CLEANUP_INTERVAL = 60 * 60 # 1 hour
-    HEARTBEAT_INTERVAL = 20 # seconds
-    HEARTBEAT_LIFESPAN = 60 # seconds
-    HEARTBEAT_RETRY_DELAY = 1 # seconds
     WORKING_QUEUE_PREFIX = "working"
 
     # Defines how often we try to take a lease to not flood our
@@ -62,56 +59,21 @@ module Sidekiq
 
       Sidekiq.logger.info("Sidekiq power fetch activated!")
 
-      # Set the heartbeat immediately to prevent a race condition where
-      # worker_dead? returns true in another thread. `start_heartbeat_thread`
-      # isn't guaranteed to have run before Sidekiq attempts to fetch jobs.
-      heartbeat
-
-      start_heartbeat_thread
-    end
-
-    def self.start_heartbeat_thread
-      Thread.new do
-        loop do
-          begin
-            heartbeat
-
-            sleep HEARTBEAT_INTERVAL
-          rescue => e
-            Sidekiq.logger.error("Heartbeat thread error: #{e.message}")
-
-            sleep HEARTBEAT_RETRY_DELAY
-          end
-        end
-      end
-    end
-
-    def self.hostname
-      Socket.gethostname
-    end
-
-    def self.process_nonce
-      @process_nonce ||= SecureRandom.hex(6)
+      Heartbeat.start
     end
 
     def self.identity
-      @identity ||= "#{hostname}:#{$$}:#{process_nonce}"
-    end
+      @identity ||= begin
+        hostname = Socket.gethostname
+        pid = Process.pid
+        process_nonce = SecureRandom.hex(6)
 
-    def self.heartbeat
-      Sidekiq.redis do |conn|
-        conn.set(heartbeat_key(identity), 1, ex: HEARTBEAT_LIFESPAN)
+        "#{hostname}:#{pid}:#{process_nonce}"
       end
-
-      Sidekiq.logger.debug("Heartbeat for #{identity}")
     end
 
     def self.worker_dead?(identity, conn)
-      !conn.get(heartbeat_key(identity))
-    end
-
-    def self.heartbeat_key(identity)
-      "sidekiq-power-fetch-heartbeat-#{identity.gsub(':', '-')}"
+      !conn.get(Heartbeat.key(identity))
     end
 
     def self.working_queue_name(queue)
@@ -206,8 +168,7 @@ module Sidekiq
     end
 
     def extract_queue_and_identity(key)
-      # New identity format is "{hostname}:{pid}:{randomhex}
-      # Old identity format is "{hostname}:{pid}"
+      # Identity format is "{hostname}:{pid}:{randomhex}
       # Queue names may also have colons (namespaced).
       # Expressing this in a single regex is unreadable
 
