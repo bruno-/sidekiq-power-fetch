@@ -1,19 +1,19 @@
 # frozen_string_literal: true
 
-require_relative 'interrupted_set'
+require_relative "interrupted_set"
 
 module Sidekiq
-  class BaseReliableFetch
-    DEFAULT_CLEANUP_INTERVAL = 60 * 60  # 1 hour
-    HEARTBEAT_INTERVAL       = 20       # seconds
-    HEARTBEAT_LIFESPAN       = 60       # seconds
-    HEARTBEAT_RETRY_DELAY    = 1        # seconds
-    WORKING_QUEUE_PREFIX     = 'working'
+  class PowerFetch
+    DEFAULT_CLEANUP_INTERVAL = 60 * 60 # 1 hour
+    HEARTBEAT_INTERVAL = 20 # seconds
+    HEARTBEAT_LIFESPAN = 60 # seconds
+    HEARTBEAT_RETRY_DELAY = 1 # seconds
+    WORKING_QUEUE_PREFIX = "working"
 
     # Defines how often we try to take a lease to not flood our
     # Redis server with SET requests
     DEFAULT_LEASE_INTERVAL = 2 * 60 # seconds
-    LEASE_KEY              = 'reliable-fetcher-cleanup-lock'
+    LEASE_KEY = "sidekiq-power-fetch-cleanup-lock"
 
     # Defines the COUNT parameter that will be passed to Redis SCAN command
     SCAN_COUNT = 1000
@@ -25,37 +25,42 @@ module Sidekiq
     WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*:[0-9a-f]*)\z/.freeze
     LEGACY_WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*)\z/.freeze
 
-    UnitOfWork = Struct.new(:queue, :job) do
+    # For reliable fetch we don't use Redis' blocking operations so
+    # we inject a regular sleep into the loop.
+    RELIABLE_FETCH_IDLE_TIMEOUT = 5 # seconds
+
+    class UnitOfWork
+      def initialize(queue, job)
+        @queue = queue
+        @job = job
+      end
+
       def acknowledge
-        Sidekiq.redis { |conn| conn.lrem(Sidekiq::BaseReliableFetch.working_queue_name(queue), 1, job) }
+        Sidekiq.redis do |conn|
+          conn.lrem(PowerFetch.working_queue_name(@queue), 1, @job)
+        end
       end
 
       def queue_name
-        queue.sub(/.*queue:/, '')
+        @queue.sub(/.*queue:/, '')
       end
 
       def requeue
         Sidekiq.redis do |conn|
           conn.multi do |multi|
-            multi.lpush(queue, job)
-            multi.lrem(Sidekiq::BaseReliableFetch.working_queue_name(queue), 1, job)
+            multi.lpush(@queue, @job)
+            multi.lrem(PowerFetch.working_queue_name(@queue), 1, @job)
           end
         end
       end
     end
 
-    def self.setup_reliable_fetch!(config)
+    def self.setup!(config)
       config = config.options unless config.respond_to?(:[])
 
-      fetch_strategy = if config[:semi_reliable_fetch]
-                         Sidekiq::SemiReliableFetch
-                       else
-                         Sidekiq::ReliableFetch
-                       end
+      config[:fetch] = new(config)
 
-      config[:fetch] = fetch_strategy.new(config)
-
-      Sidekiq.logger.info('GitLab reliable fetch activated!')
+      Sidekiq.logger.info("Sidekiq power fetch activated!")
 
       # Set the heartbeat immediately to prevent a race condition where
       # worker_dead? returns true in another thread. `start_heartbeat_thread`
@@ -86,11 +91,11 @@ module Sidekiq
     end
 
     def self.process_nonce
-      @@process_nonce ||= SecureRandom.hex(6)
+      @process_nonce ||= SecureRandom.hex(6)
     end
 
     def self.identity
-      @@identity ||= "#{hostname}:#{$$}:#{process_nonce}"
+      @identity ||= "#{hostname}:#{$$}:#{process_nonce}"
     end
 
     def self.heartbeat
@@ -106,7 +111,7 @@ module Sidekiq
     end
 
     def self.heartbeat_key(identity)
-      "reliable-fetcher-heartbeat-#{identity.gsub(':', '-')}"
+      "sidekiq-power-fetch-heartbeat-#{identity.gsub(':', '-')}"
     end
 
     def self.working_queue_name(queue)
@@ -114,11 +119,11 @@ module Sidekiq
     end
 
     attr_reader :cleanup_interval, :last_try_to_take_lease_at, :lease_interval,
-                :queues, :use_semi_reliable_fetch,
+                :queues, :queues_size, :use_semi_reliable_fetch,
                 :strictly_ordered_queues
 
     def initialize(options)
-      raise ArgumentError, 'missing queue list' unless options[:queues]
+      raise ArgumentError, "missing queue list" unless options[:queues]
 
       @config = options
       @interrupted_set = Sidekiq::InterruptedSet.new
@@ -126,18 +131,17 @@ module Sidekiq
       @lease_interval = options.fetch(:lease_interval, DEFAULT_LEASE_INTERVAL)
       @last_try_to_take_lease_at = 0
       @strictly_ordered_queues = !!options[:strict]
-      @queues = options[:queues].map { |q| "queue:#{q}" }
+
+      queues = options[:queues].map { |q| "queue:#{q}" }
+      @queues = queues.uniq if strictly_ordered_queues
+
+      @queues_size = queues.size
     end
 
     def retrieve_work
       clean_working_queues! if take_lease
 
       retrieve_unit_of_work
-    end
-
-    def retrieve_unit_of_work
-      raise NotImplementedError,
-            "#{self.class} does not implement #{__method__}"
     end
 
     def bulk_requeue(inprogress, _options)
@@ -158,9 +162,27 @@ module Sidekiq
 
     private
 
+    def retrieve_unit_of_work
+      queues_list = strictly_ordered_queues ? queues : queues.shuffle
+
+      queues_list.each do |queue|
+        work = Sidekiq.redis do |conn|
+          conn.rpoplpush(queue, self.class.working_queue_name(queue))
+        end
+
+        return UnitOfWork.new(queue, work) if work
+      end
+
+      # We didn't find a job in any of the configured queues. Let's sleep a bit
+      # to avoid uselessly burning too much CPU
+      sleep(RELIABLE_FETCH_IDLE_TIMEOUT)
+
+      nil
+    end
+
     def preprocess_interrupted_job(job, queue, conn = nil)
       msg = Sidekiq.load_json(job)
-      msg['interrupted_count'] = msg['interrupted_count'].to_i + 1
+      msg["interrupted_count"] = msg["interrupted_count"].to_i + 1
 
       if interruption_exhausted?(msg)
         send_to_quarantine(msg, conn)
@@ -177,8 +199,8 @@ module Sidekiq
       end
 
       Sidekiq.logger.info(
-        message: "Pushed job #{msg['jid']} back to queue #{queue}",
-        jid: msg['jid'],
+        message: "Pushed job #{msg["jid"]} back to queue #{queue}",
+        jid: msg["jid"],
         queue: queue
       )
     end
@@ -199,7 +221,7 @@ module Sidekiq
     # Detect "old" jobs and requeue them because the worker they were assigned
     # to probably failed miserably.
     def clean_working_queues!
-      Sidekiq.logger.info('Cleaning working queues')
+      Sidekiq.logger.info("Cleaning working queues")
 
       Sidekiq.redis do |conn|
         conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
@@ -221,9 +243,9 @@ module Sidekiq
     end
 
     def interruption_exhausted?(msg)
-      return false if max_retries_after_interruption(msg['class']) < 0
+      return false if max_retries_after_interruption(msg["class"]) < 0
 
-      msg['interrupted_count'].to_i >= max_retries_after_interruption(msg['class'])
+      msg["interrupted_count"].to_i >= max_retries_after_interruption(msg["class"])
     end
 
     def max_retries_after_interruption(worker_class)
@@ -241,9 +263,9 @@ module Sidekiq
 
     def send_to_quarantine(msg, multi_connection = nil)
       Sidekiq.logger.warn(
-        class: msg['class'],
-        jid: msg['jid'],
-        message: %(Reliable Fetcher: adding dead #{msg['class']} job #{msg['jid']} to interrupted queue)
+        class: msg["class"],
+        jid: msg["jid"],
+        message: %(Reliable Fetcher: adding dead #{msg["class"]} job #{msg["jid"]} to interrupted queue)
       )
 
       job = Sidekiq.dump_json(msg)

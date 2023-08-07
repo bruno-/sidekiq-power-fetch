@@ -1,9 +1,17 @@
-require 'sidekiq/api'
+require "sidekiq/api"
 
 module Sidekiq
   class InterruptedSet < ::Sidekiq::JobSet
     DEFAULT_MAX_CAPACITY = 10_000
     DEFAULT_MAX_TIMEOUT = 90 * 24 * 60 * 60 # 3 months
+
+    def self.max_jobs
+      Sidekiq.options[:interrupted_max_jobs] || DEFAULT_MAX_CAPACITY
+    end
+
+    def self.timeout
+      Sidekiq.options[:interrupted_timeout_in_seconds] || DEFAULT_MAX_TIMEOUT
+    end
 
     def initialize
       super "interrupted"
@@ -14,7 +22,7 @@ module Sidekiq
 
       with_multi_connection(opts[:connection]) do |conn|
         conn.zadd(name, now.to_s, message)
-        conn.zremrangebyscore(name, '-inf', now - self.class.timeout)
+        conn.zremrangebyscore(name, "-inf", now - self.class.timeout)
         conn.zremrangebyrank(name, 0, - self.class.max_jobs)
       end
 
@@ -34,18 +42,6 @@ module Sidekiq
 
     def retry_all
       each(&:retry) while size > 0
-    end
-
-    def self.max_jobs
-      options[:interrupted_max_jobs] || DEFAULT_MAX_CAPACITY
-    end
-
-    def self.timeout
-      options[:interrupted_timeout_in_seconds] || DEFAULT_MAX_TIMEOUT
-    end
-
-    def self.options
-      Sidekiq.respond_to?(:[]) ? Sidekiq : Sidekiq.options
     end
   end
 end
