@@ -16,17 +16,7 @@ Add the following to your `Gemfile`:
 gem "sidekiq-power-fetch"
 ```
 
-## Setup
-
-To enable reliable fetches:
-
-```ruby
-Sidekiq.configure_server do |config|
-  Sidekiq::PowerFetch.setup!(config)
-
-  # ...
-end
-```
+Additional configuration is not necessary - power fetch just works.
 
 ## License
 

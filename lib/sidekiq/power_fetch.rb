@@ -17,7 +17,9 @@ module Sidekiq
       config[:fetch] = new(config)
       config.logger.info("[PowerFetch] Activated!")
 
-      Heartbeat.start
+      config.on(:startup) do
+        Heartbeat.start
+      end
     end
 
     def self.identity
