@@ -43,7 +43,7 @@ module Sidekiq
           conn.set(key, 1, ex: LIFESPAN)
         end
 
-        Sidekiq.logger.debug("Heartbeat for #{PowerFetch.identity}")
+        Sidekiq.logger.debug("[PowerFetch] Heartbeat for #{PowerFetch.identity}")
       end
 
       def thread
@@ -53,7 +53,7 @@ module Sidekiq
 
             sleep INTERVAL
           rescue => e
-            Sidekiq.logger.error("Heartbeat thread error: #{e.message}")
+            Sidekiq.logger.error("[PowerFetch] Heartbeat thread error: #{e.message}")
 
             sleep RETRY_DELAY
           end

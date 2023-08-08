@@ -9,10 +9,18 @@ module Sidekiq
       # Defines the COUNT parameter that will be passed to Redis SCAN command
       SCAN_COUNT = 1000
 
+      # How much time a job can be interrupted
+      RECOVERIES = 3
+
+      # Regexes for matching working queue keys
+      WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*:[0-9a-f]*)\z/.freeze
+      LEGACY_WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*)\z/.freeze
+
       def initialize(config)
         @config = config
         @lock = Lock.new(@config)
         @interrupted_set = InterruptedSet.new
+        @recoveries = @config[:power_fetch_recoveries] || RECOVERIES
       end
 
       def lock
@@ -22,7 +30,7 @@ module Sidekiq
       # Detect "old" jobs and requeue them because the worker they were assigned
       # to probably failed miserably.
       def call
-        @config.logger.info("Cleaning working queues")
+        @config.logger.info("[PowerFetch] Cleaning working queues")
 
         @config.redis do |conn|
           conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
@@ -43,9 +51,7 @@ module Sidekiq
         end
 
         @config.logger.info(
-          message: "Pushed job #{msg["jid"]} back to queue #{queue}",
-          jid: msg["jid"],
-          queue: queue
+          "[PowerFetch] Pushed job #{msg["jid"]} back to queue '#{queue}'"
         )
       end
 
@@ -83,30 +89,15 @@ module Sidekiq
       end
 
       def interruption_exhausted?(msg)
-        return false if max_retries_after_interruption(msg["class"]) < 0
+        return false if @recoveries < 0
 
-        msg["interrupted_count"].to_i >= max_retries_after_interruption(msg["class"])
-      end
-
-      # TODO: Delete method.
-      def max_retries_after_interruption(worker_class)
-        max_retries_after_interruption = nil
-
-        max_retries_after_interruption ||= begin
-          Object.const_get(worker_class).sidekiq_options[:max_retries_after_interruption]
-        rescue NameError
-        end
-
-        max_retries_after_interruption ||= @config[:max_retries_after_interruption]
-        max_retries_after_interruption ||= DEFAULT_MAX_RETRIES_AFTER_INTERRUPTION
-        max_retries_after_interruption
+        msg["interrupted_count"].to_i >= @recoveries
       end
 
       def send_to_quarantine(msg, multi_connection = nil)
         @config.logger.warn(
-          class: msg["class"],
-          jid: msg["jid"],
-          message: %(Sidekiq PowerFetch: adding dead #{msg["class"]} job #{msg["jid"]} to interrupted queue)
+          "[PowerFetch]: adding dead #{msg["class"]} job #{msg["jid"]} " \
+          "to interrupted queue"
         )
 
         job = Sidekiq.dump_json(msg)

@@ -8,20 +8,13 @@ module Sidekiq
   class PowerFetch
     WORKING_QUEUE_PREFIX = "working"
 
-    # How much time a job can be interrupted
-    DEFAULT_MAX_RETRIES_AFTER_INTERRUPTION = 3
-
-    # Regexes for matching working queue keys
-    WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*:[0-9a-f]*)\z/.freeze
-    LEGACY_WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*)\z/.freeze
-
     # For reliable fetch we don't use Redis' blocking operations so
     # we inject a regular sleep into the loop.
     IDLE_TIMEOUT = 5 # seconds
 
     def self.setup!(config)
       config[:fetch] = new(config)
-      config.logger.info("Sidekiq power fetch activated!")
+      config.logger.info("[PowerFetch] activated!")
 
       Heartbeat.start
     end
@@ -99,7 +92,7 @@ module Sidekiq
         end
       end
     rescue => e
-      @config.logger.warn("Failed to requeue #{inprogress.size} jobs: #{e.message}")
+      @config.logger.warn("[PowerFetch] Failed to requeue #{inprogress.size} jobs: #{e.message}")
     end
   end
 end
