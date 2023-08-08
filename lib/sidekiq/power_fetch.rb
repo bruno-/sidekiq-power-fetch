@@ -66,7 +66,9 @@ module Sidekiq
 
       queues_list.each do |queue|
         work = @config.redis do |conn|
-          conn.rpoplpush(queue, self.class.working_queue_name(queue))
+          # Can't use 'blmove' here: empty blocked queue would then block
+          # other, potentially non-empty, queues.
+          conn.lmove(queue, self.class.working_queue_name(queue), :right, :left)
         end
 
         return UnitOfWork.new(queue, work) if work
