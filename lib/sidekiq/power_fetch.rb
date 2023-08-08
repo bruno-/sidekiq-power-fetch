@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 require_relative "power_fetch/heartbeat"
-require_relative "power_fetch/recover"
 require_relative "power_fetch/unit_of_work"
+# "recover" is required at the bottom of the file, after
+# PowerFetch::WORKING_QUEUE_PREFIX constant is defined.
 
 module Sidekiq
   class PowerFetch
@@ -14,7 +15,7 @@ module Sidekiq
 
     def self.setup!(config)
       config[:fetch] = new(config)
-      config.logger.info("[PowerFetch] activated!")
+      config.logger.info("[PowerFetch] Activated!")
 
       Heartbeat.start
     end
@@ -22,15 +23,11 @@ module Sidekiq
     def self.identity
       @identity ||= begin
         hostname = ENV["DYNO"] || Socket.gethostname
-        pid = Process.pid
+        pid = ::Process.pid
         process_nonce = SecureRandom.hex(6)
 
         "#{hostname}:#{pid}:#{process_nonce}"
       end
-    end
-
-    def self.worker_dead?(identity, conn)
-      !conn.get(Heartbeat.key(identity))
     end
 
     def self.working_queue_name(queue)
@@ -96,3 +93,5 @@ module Sidekiq
     end
   end
 end
+
+require_relative "power_fetch/recover"

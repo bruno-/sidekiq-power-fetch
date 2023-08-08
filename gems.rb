@@ -4,7 +4,4 @@ source "https://rubygems.org"
 
 gemspec
 
-group :test do
-  gem "simplecov", require: false
-  gem "stub_env", "~> 1.0"
-end
+gem "simplecov"

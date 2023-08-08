@@ -3,6 +3,9 @@
 module Sidekiq
   class PowerFetch
     class UnitOfWork
+      attr_reader :queue
+      attr_reader :job
+
       def initialize(queue, job)
         @queue = queue
         @job = job

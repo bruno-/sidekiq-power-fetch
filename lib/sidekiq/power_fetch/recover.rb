@@ -13,8 +13,7 @@ module Sidekiq
       RECOVERIES = 3
 
       # Regexes for matching working queue keys
-      WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*:[0-9a-f]*)\z/.freeze
-      LEGACY_WORKING_QUEUE_REGEX = /#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*)\z/.freeze
+      WORKING_QUEUE_REGEX = /\A#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*:[0-9a-f]*)\z/
 
       def initialize(config)
         @config = config
@@ -30,15 +29,23 @@ module Sidekiq
       # Detect "old" jobs and requeue them because the worker they were assigned
       # to probably failed miserably.
       def call
-        @config.logger.info("[PowerFetch] Cleaning working queues")
+        @config.logger.info("[PowerFetch] Recovering working queues")
 
         @config.redis do |conn|
-          conn.scan_each(match: "#{WORKING_QUEUE_PREFIX}:queue:*", count: SCAN_COUNT) do |key|
-            original_queue, identity = extract_queue_and_identity(key)
+          conn.scan(
+            match: "#{WORKING_QUEUE_PREFIX}:queue:*",
+            count: SCAN_COUNT
+          ) do |key|
+            # Identity format is "{hostname}:{pid}:{randomhex}
+            # Queue names may also have colons (namespaced).
+            # Expressing this in a single regex is unreadable
+            original_queue, identity = key.scan(WORKING_QUEUE_REGEX).flatten
 
             next if original_queue.nil? || identity.nil?
 
-            clean_working_queue!(original_queue, key) if self.class.worker_dead?(identity, conn)
+            if worker_dead?(identity, conn)
+              recover_working_queue!(original_queue, key)
+            end
           end
         end
       end
@@ -57,7 +64,7 @@ module Sidekiq
 
       private
 
-      def clean_working_queue!(original_queue, working_queue)
+      def recover_working_queue!(original_queue, working_queue)
         @config.redis do |conn|
           while job = conn.rpop(working_queue)
             preprocess_interrupted_job(job, original_queue)
@@ -74,18 +81,6 @@ module Sidekiq
         else
           requeue_job(queue, msg, conn)
         end
-      end
-
-      def extract_queue_and_identity(key)
-        # Identity format is "{hostname}:{pid}:{randomhex}
-        # Queue names may also have colons (namespaced).
-        # Expressing this in a single regex is unreadable
-
-        # Test the newer expected format first, only checking the older if necessary
-        original_queue, identity = key.scan(WORKING_QUEUE_REGEX).flatten
-        return original_queue, identity unless original_queue.nil? || identity.nil?
-
-        key.scan(LEGACY_WORKING_QUEUE_REGEX).flatten
       end
 
       def interruption_exhausted?(msg)
@@ -109,6 +104,10 @@ module Sidekiq
         return yield(conn) if conn
 
         @config.redis { |redis_conn| yield(redis_conn) }
+      end
+
+      def worker_dead?(identity, conn)
+        !conn.get(Heartbeat.key(identity))
       end
     end
   end
