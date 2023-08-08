@@ -1,3 +1,6 @@
 *.gem
 coverage
-.DS_Store
+tmp/
+.ruby-version
+spec/examples.txt
+gems.locked

@@ -10,4 +10,8 @@ Gem::Specification.new do |s|
   s.files = Dir["lib/**/*"]
 
   s.add_dependency "sidekiq", "~> 7.0"
+
+  s.add_development_dependency "rspec", "~> 3.12"
+  s.add_development_dependency "rubocop-rspec", "~> 2.23"
+  s.add_development_dependency "standard", "~> 1.30"
 end
