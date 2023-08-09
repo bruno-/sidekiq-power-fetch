@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
-require 'sidekiq'
-require 'sidekiq/cli'
-require_relative 'config'
+require "sidekiq"
+require "sidekiq/cli"
+require_relative "config"
 
-def spawn_workers_and_stop_them_on_a_half_way
+def spawn_workers_and_stop_them_half_way
   pids = spawn_workers
 
   wait_until do |queue_size|
@@ -13,15 +13,15 @@ def spawn_workers_and_stop_them_on_a_half_way
 
   first_half_pids, second_half_pids = split_array(pids)
 
-  puts 'Killing half of the workers...'
-  signal_to_workers('KILL', first_half_pids)
+  puts "Killing half of the workers..."
+  signal_to_workers("KILL", first_half_pids)
 
-  puts 'Stopping another half of the workers...'
-  signal_to_workers('TERM', second_half_pids)
+  puts "Stopping another half of the workers..."
+  signal_to_workers("TERM", second_half_pids)
 end
 
 def spawn_workers_and_let_them_finish
-  puts 'Spawn workers and let them finish...'
+  puts "Spawn workers and let them finish..."
 
   pids = spawn_workers
 
@@ -29,12 +29,10 @@ def spawn_workers_and_let_them_finish
     queue_size.zero?
   end
 
-  if %i[semi reliable].include? JOB_FETCHER
-    puts 'Waiting for clean up process that will requeue dead jobs...'
-    sleep WAIT_CLEANUP
-  end
+  puts "Waiting #{WAIT_CLEANUP} seconds for recover process that will requeue dead jobs..."
+  sleep WAIT_CLEANUP
 
-  signal_to_workers('TERM', pids)
+  signal_to_workers("TERM", pids)
 end
 
 def wait_until
@@ -49,6 +47,7 @@ def wait_until
 end
 
 def signal_to_workers(signal, pids)
+  puts "Sending #{signal} to #{pids.inspect}"
   pids.each { |pid| Process.kill(signal, pid) }
   pids.each { |pid| Process.wait(pid) }
 end
@@ -56,14 +55,14 @@ end
 def spawn_workers
   pids = []
   NUMBER_OF_WORKERS.times do
-    pids << spawn('sidekiq -q default -q low -q high -r ./config.rb')
+    pids << spawn("sidekiq -q default -q low -q high -r ./config.rb")
   end
 
   pids
 end
 
 def current_queue_size
-  Sidekiq.redis { |c| c.llen('queue:default') }
+  Sidekiq.redis { |c| c.llen("queue:default") }
 end
 
 def duplicates
@@ -79,9 +78,7 @@ end
 
 ##########################################################
 
-puts '########################################'
-puts "Mode: #{JOB_FETCHER}"
-puts '########################################'
+puts "########################################"
 
 Sidekiq.redis(&:flushdb)
 
@@ -93,7 +90,7 @@ end
 
 puts "Queued #{NUMBER_OF_JOBS} jobs"
 
-spawn_workers_and_stop_them_on_a_half_way
+spawn_workers_and_stop_them_half_way
 spawn_workers_and_let_them_finish
 
 jobs_lost = 0
