@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative "lock"
-require_relative "interrupted_set"
 
 module Sidekiq
   class PowerFetch
@@ -18,7 +17,6 @@ module Sidekiq
       def initialize(capsule)
         @capsule = capsule
         @lock = Lock.new(@capsule)
-        @interrupted_set = InterruptedSet.new
         @recoveries = @capsule.lookup(:power_fetch_recoveries) || RECOVERIES
       end
 
@@ -77,7 +75,10 @@ module Sidekiq
         msg["interrupted_count"] = msg["interrupted_count"].to_i + 1
 
         if interruption_exhausted?(msg)
-          send_to_quarantine(msg, conn)
+          @capsule.logger.warn(
+            "[PowerFetch] Deleted job #{msg["class"]} jid #{msg["jid"]}, " \
+            "it was recovered too many times"
+          )
         else
           requeue_job(queue, msg, conn)
         end
@@ -87,16 +88,6 @@ module Sidekiq
         return false if @recoveries < 0
 
         msg["interrupted_count"].to_i >= @recoveries
-      end
-
-      def send_to_quarantine(msg, multi_connection = nil)
-        @capsule.logger.warn(
-          "[PowerFetch]: adding dead #{msg["class"]} job #{msg["jid"]} " \
-          "to interrupted queue"
-        )
-
-        job = Sidekiq.dump_json(msg)
-        @interrupted_set.put(job, connection: multi_connection)
       end
 
       # Yield block with an existing connection or creates another one
