@@ -12,9 +12,9 @@ module Sidekiq
         @taken_at = 0
 
         # Sidekiq processes should attempt recovery every 2 minutes.
-        @interval = @capsule.lookup(:power_fetch_lock) || DEFAULT_INTERVAL
+        @interval = @capsule.config[:power_fetch_lock] || DEFAULT_INTERVAL
         # Perform recovery at most every 1 hour.
-        @recover = @capsule.lookup(:power_fetch_recover) || DEFAULT_RECOVER
+        @recover = @capsule.config[:power_fetch_recover] || DEFAULT_RECOVER
       end
 
       def lock

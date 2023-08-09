@@ -17,7 +17,7 @@ module Sidekiq
       def initialize(capsule)
         @capsule = capsule
         @lock = Lock.new(@capsule)
-        @recoveries = @capsule.lookup(:power_fetch_recoveries) || RECOVERIES
+        @recoveries = @capsule.config[:power_fetch_recoveries] || RECOVERIES
       end
 
       def lock
