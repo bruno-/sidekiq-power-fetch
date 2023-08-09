@@ -1,28 +1,43 @@
 # frozen_string_literal: true
 
-require "singleton"
-
 module Sidekiq
   class PowerFetch
     class Heartbeat
-      include Singleton
-
-      INTERVAL = 20 # seconds
       LIFESPAN = 60 # seconds
-      RETRY_DELAY = 1 # seconds
+
+      def self.start(config)
+        new(config)
+      end
+
+      def self.started?
+        @started
+      end
+
+      def self.started=(value)
+        @started = value
+      end
+
+      def initialize(config)
+        raise "#{self.class} already started" if self.class.started?
+
+        @config = config
+        @config.on(:heartbeat) do
+          pulse
+        end
+        self.class.started = true
+      end
 
       def self.key(identity)
         id = identity.tr(":", "-")
         "sidekiq-power-fetch-heartbeat-#{id}"
       end
 
-      def initialize
-        # Pulse immediately to prevent a race condition where
-        # PowerFetch::Recover#worker_dead? returns true in another thread.
-        # `@thread` may NOT run before Sidekiq attempts to fetch jobs.
-        pulse
+      def pulse
+        @config.redis do |conn|
+          conn.set(key, 1, ex: LIFESPAN)
+        end
 
-        pulse_periodically
+        @config.logger.debug("[PowerFetch] Heartbeat for #{PowerFetch.identity}")
       end
 
       private
@@ -30,29 +45,6 @@ module Sidekiq
       def key
         @key ||= self.class.key(PowerFetch.identity)
       end
-
-      def pulse
-        Sidekiq.redis do |conn|
-          conn.set(key, 1, ex: LIFESPAN)
-        end
-
-        Sidekiq.logger.debug("[PowerFetch] Heartbeat for #{PowerFetch.identity}")
-      end
-
-      def thread
-        @thread ||= Thread.new do
-          loop do
-            pulse
-
-            sleep INTERVAL
-          rescue => e
-            Sidekiq.logger.error("[PowerFetch] Heartbeat thread error: #{e.message}")
-
-            sleep RETRY_DELAY
-          end
-        end
-      end
-      alias_method :pulse_periodically, :thread
     end
   end
 end

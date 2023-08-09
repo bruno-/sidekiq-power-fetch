@@ -35,9 +35,6 @@ module Sidekiq
       @queues.uniq! if @strictly_ordered_queues
 
       @recover = Recover.new(@capsule)
-      # There may be multiple capsules, but there's only one Heartbeat instance
-      # per process.
-      @heartbeat = Heartbeat.instance
       @capsule.logger.info("[PowerFetch] Activated!")
     end
 
