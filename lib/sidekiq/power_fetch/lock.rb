@@ -21,6 +21,7 @@ module Sidekiq
         return unless take?
 
         @taken_at = time
+        # Return value is "OK" or nil.
         @capsule.redis do |conn|
           conn.set(KEY, 1, nx: true, ex: @recover)
         end

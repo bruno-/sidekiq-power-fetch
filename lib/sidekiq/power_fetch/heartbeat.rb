@@ -21,9 +21,11 @@ module Sidekiq
         raise "#{self.class} already started" if self.class.started?
 
         @config = config
-        @config.on(:heartbeat) do
-          pulse
-        end
+
+        # Must pulse on startup, else races: other workers think the current
+        # process is dead, but it just didn't heartbeat yet.
+        @config.on(:startup) { pulse }
+        @config.on(:heartbeat) { pulse }
         self.class.started = true
       end
 
