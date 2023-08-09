@@ -18,7 +18,9 @@ Sidekiq.configure_server do |config|
   # The default values are good for production use only
   config[:power_fetch_recover] = TEST_RECOVER
   config[:power_fetch_lock] = TEST_LOCK
-  config.redis = {
-    db: 11
-  }
+  config.redis = {db: 11}
+end
+
+Sidekiq.configure_client do |config|
+  config.redis = {db: 11}
 end

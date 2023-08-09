@@ -3,9 +3,9 @@
 class RetryTestWorker
   include Sidekiq::Worker
 
-  def perform(signal = 'KILL', wait_seconds = 1)
+  def perform(signal, wait_seconds = 1)
     Sidekiq.redis do |redis|
-      redis.incr('times_has_been_run')
+      redis.incr("times_has_been_run")
     end
 
     Process.kill(signal, Process.pid)
