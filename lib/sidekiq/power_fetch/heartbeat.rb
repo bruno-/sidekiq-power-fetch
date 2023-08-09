@@ -11,13 +11,6 @@ module Sidekiq
       LIFESPAN = 60 # seconds
       RETRY_DELAY = 1 # seconds
 
-      def self.start
-        raise "#{self} already started" if @started
-
-        instance
-        @started = true
-      end
-
       def self.key(identity)
         id = identity.tr(":", "-")
         "sidekiq-power-fetch-heartbeat-#{id}"
@@ -25,7 +18,7 @@ module Sidekiq
 
       def initialize
         # Pulse immediately to prevent a race condition where
-        # PowerFertch.worker_dead? returns true in another thread.
+        # PowerFetch::Recover#worker_dead? returns true in another thread.
         # `@thread` may NOT run before Sidekiq attempts to fetch jobs.
         pulse
 

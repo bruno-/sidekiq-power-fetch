@@ -9,18 +9,9 @@ module Sidekiq
   class PowerFetch
     WORKING_QUEUE_PREFIX = "working"
 
-    # For reliable fetch we don't use Redis' blocking operations so
+    # We don't use Redis' blocking operations for fetch so
     # we inject a regular sleep into the loop.
     IDLE_TIMEOUT = 5 # seconds
-
-    def self.setup!(config)
-      config[:fetch] = new(config)
-      config.logger.info("[PowerFetch] Activated!")
-
-      config.on(:startup) do
-        Heartbeat.start
-      end
-    end
 
     def self.identity
       @identity ||= begin
@@ -36,17 +27,18 @@ module Sidekiq
       "#{WORKING_QUEUE_PREFIX}:#{queue}:#{identity}"
     end
 
-    def initialize(config)
-      raise ArgumentError, "missing queue list" unless config.queues
+    def initialize(capsule)
+      raise ArgumentError, "missing queue list" unless capsule.queues
+      @capsule = capsule
+      @strictly_ordered_queues = capsule.mode == :strict
+      @queues = @capsule.queues.map { |q| "queue:#{q}" }
+      @queues.uniq! if @strictly_ordered_queues
 
-      @config = config
-      @recover = Recover.new(@config)
-
-      @strictly_ordered_queues = (@config.queues.size == config.queues.uniq.size)
-      @queues = config.queues.map { |q| "queue:#{q}" }
-      if @strictly_ordered_queues
-        @queues.uniq!
-      end
+      @recover = Recover.new(@capsule)
+      # There may be multiple capsules, but there's only one Heartbeat instance
+      # per process.
+      @heartbeat = Heartbeat.instance
+      @capsule.logger.info("[PowerFetch] Activated!")
     end
 
     def retrieve_work
@@ -57,7 +49,7 @@ module Sidekiq
       queues_list = @strictly_ordered_queues ? @queues : @queues.shuffle
 
       queues_list.each do |queue|
-        work = @config.redis do |conn|
+        work = @capsule.redis do |conn|
           # Can't use 'blmove' here: empty blocked queue would then block
           # other, potentially non-empty, queues.
           conn.lmove(queue, self.class.working_queue_name(queue), :right, :left)
@@ -77,10 +69,10 @@ module Sidekiq
     # are still busy threads. The threads are shutdown, but their jobs are
     # requeued.
     # https://github.com/sidekiq/sidekiq/blob/323a5cfaefdde20588f5ffdf0124691db83fd315/lib/sidekiq/manager.rb#L107
-    def bulk_requeue(inprogress, _options)
+    def bulk_requeue(inprogress)
       return if inprogress.empty?
 
-      @config.redis do |conn|
+      @capsule.redis do |conn|
         inprogress.each do |unit_of_work|
           conn.multi do |multi|
             msg = Sidekiq.load_json(unit_of_work.job)
@@ -91,7 +83,7 @@ module Sidekiq
         end
       end
     rescue => e
-      @config.logger.warn("[PowerFetch] Failed to requeue #{inprogress.size} jobs: #{e.message}")
+      @capsule.logger.warn("[PowerFetch] Failed to requeue #{inprogress.size} jobs: #{e.message}")
     end
   end
 end

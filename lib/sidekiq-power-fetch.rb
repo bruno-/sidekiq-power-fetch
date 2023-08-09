@@ -6,5 +6,5 @@ require "sidekiq/api"
 require_relative "sidekiq/power_fetch"
 
 Sidekiq.configure_server do |config|
-  Sidekiq::PowerFetch.setup!(config)
+  config[:fetch_class] = Sidekiq::PowerFetch
 end

@@ -15,11 +15,11 @@ module Sidekiq
       # Regexes for matching working queue keys
       WORKING_QUEUE_REGEX = /\A#{WORKING_QUEUE_PREFIX}:(queue:.*):([^:]*:[0-9]*:[0-9a-f]*)\z/
 
-      def initialize(config)
-        @config = config
-        @lock = Lock.new(@config)
+      def initialize(capsule)
+        @capsule = capsule
+        @lock = Lock.new(@capsule)
         @interrupted_set = InterruptedSet.new
-        @recoveries = @config[:power_fetch_recoveries] || RECOVERIES
+        @recoveries = @capsule.lookup(:power_fetch_recoveries) || RECOVERIES
       end
 
       def lock
@@ -29,9 +29,9 @@ module Sidekiq
       # Detect "old" jobs and requeue them because the worker they were assigned
       # to probably failed miserably.
       def call
-        @config.logger.info("[PowerFetch] Recovering working queues")
+        @capsule.logger.info("[PowerFetch] Recovering working queues")
 
-        @config.redis do |conn|
+        @capsule.redis do |conn|
           conn.scan(
             match: "#{WORKING_QUEUE_PREFIX}:queue:*",
             count: SCAN_COUNT
@@ -57,7 +57,7 @@ module Sidekiq
           conn.lpush(queue, Sidekiq.dump_json(msg))
         end
 
-        @config.logger.info(
+        @capsule.logger.info(
           "[PowerFetch] Pushed job #{msg["jid"]} back to queue '#{queue}'"
         )
       end
@@ -65,7 +65,7 @@ module Sidekiq
       private
 
       def recover_working_queue!(original_queue, working_queue)
-        @config.redis do |conn|
+        @capsule.redis do |conn|
           while job = conn.rpop(working_queue)
             preprocess_interrupted_job(job, original_queue)
           end
@@ -90,7 +90,7 @@ module Sidekiq
       end
 
       def send_to_quarantine(msg, multi_connection = nil)
-        @config.logger.warn(
+        @capsule.logger.warn(
           "[PowerFetch]: adding dead #{msg["class"]} job #{msg["jid"]} " \
           "to interrupted queue"
         )
@@ -103,7 +103,7 @@ module Sidekiq
       def with_connection(conn)
         return yield(conn) if conn
 
-        @config.redis { |redis_conn| yield(redis_conn) }
+        @capsule.redis { |redis_conn| yield(redis_conn) }
       end
 
       def worker_dead?(identity, conn)
