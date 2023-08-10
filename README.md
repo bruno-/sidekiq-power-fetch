@@ -27,6 +27,11 @@ By all means buy Sidekiq PRO, if your project can afford it.
 However, if you need a reliable solution for a hobby project, or your
 commercial project doesn't have enough revenue (yet), you can use this gem.
 
+## Using this gem?
+
+Please [email me](mailto:sidekiq-power-fetch@brunosutic.com) if you're using
+this gem and would like to be added to the list of users in the readme.
+
 ## License
 
 LGPL-3.0, see the [LICENSE file](LICENSE).
