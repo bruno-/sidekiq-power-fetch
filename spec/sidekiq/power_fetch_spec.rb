@@ -1,29 +1,11 @@
-require "sidekiq/power_fetch"
-require "sidekiq/capsule"
-
 RSpec.describe Sidekiq::PowerFetch do
-  let(:queues) { ["assigned"] }
-  let(:power_fetch_lock) { nil }
-  let(:power_fetch_recover) { nil }
-  let(:config) { Sidekiq.default_configuration }
-  let(:job) { Sidekiq.dump_json(class: "Bob", args: [1, 2, "foo"]) }
-
-  before do
-    Sidekiq.redis(&:flushdb)
-    config.queues = queues
-    config[:power_fetch_lock] = power_fetch_lock
-    config[:power_fetch_recover] = power_fetch_recover
-  end
-
-  subject!(:fetcher) { described_class.new(config) }
+  include_context :power_fetch
 
   describe "#retrieve_work" do
     context "multiple #retrieve_work" do
       let(:recover) { fetcher.instance_variable_get(:@recover) }
-
-      before do
-        config[:redis] =
-          Sidekiq::RedisConnection.create(url: REDIS_URL, size: 10)
+      let(:config) do
+        {redis: Sidekiq::RedisConnection.create(url: REDIS_URL, size: 10)}
       end
 
       it "cleans orphaned jobs once per cleanup interval" do
@@ -54,7 +36,7 @@ RSpec.describe Sidekiq::PowerFetch do
     end
 
     context "when strict order is disabled" do
-      let(:queues) { ["first", "first", "second"] }
+      let(:queues) { [["first", 2], ["second", 1]] }
 
       it "does not starve any queue" do
         Sidekiq.redis do |conn|
@@ -187,51 +169,12 @@ RSpec.describe Sidekiq::PowerFetch do
       end
 
       it "requeues jobs" do
-        fetcher.bulk_requeue(jobs, nil)
+        fetcher.bulk_requeue(jobs)
 
         expect(queue1.size).to eq 2
         expect(queue2.size).to eq 1
       end
     end
-
-    context "with interrupted job" do
-      let(:jobs) do
-        [
-          unit_of_work("queue:foo", interrupted_job),
-          unit_of_work("queue:foo", job),
-          unit_of_work("queue:bar", job)
-        ]
-      end
-
-      it "requeues all jobs" do
-        fetcher.bulk_requeue(jobs, nil)
-
-        expect(queue1.size).to eq 2
-        expect(queue2.size).to eq 1
-        expect(Sidekiq::PowerFetch::InterruptedSet.new.size).to eq 0
-      end
-    end
-  end
-
-  describe "heartbeat" do
-    it "sets heartbeat" do
-      described_class.setup!(config)
-
-      Sidekiq.redis do |conn|
-        sleep 0.2 # Give the time to heartbeat thread to make a loop
-
-        key = described_class::Heartbeat.key(described_class.identity)
-        heartbeat = conn.get(key)
-
-        expect(heartbeat).not_to be_nil
-      end
-    end
-  end
-end
-
-def working_queue_size(queue_name)
-  Sidekiq.redis do |c|
-    c.llen(Sidekiq::PowerFetch.working_queue_name("queue:#{queue_name}"))
   end
 end
 

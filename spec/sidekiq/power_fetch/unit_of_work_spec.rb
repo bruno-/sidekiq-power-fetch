@@ -1,17 +1,6 @@
-require "sidekiq/power_fetch"
-require "sidekiq/capsule"
-
 RSpec.describe Sidekiq::PowerFetch::UnitOfWork do
-  let(:job) { Sidekiq.dump_json(class: "Bob", args: [1, 2, "foo"]) }
-  let(:config) { Sidekiq.default_configuration }
+  include_context :power_fetch
   let(:queues) { ["foo"] }
-
-  before do
-    Sidekiq.redis(&:flushdb)
-    config.queues = queues
-  end
-
-  subject!(:fetcher) { Sidekiq::PowerFetch.new(config) }
 
   describe "#requeue" do
     it "requeues job" do
